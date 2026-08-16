@@ -1,0 +1,15 @@
+{
+  "name": "@deepseek-ai/dsh-desktop",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Private source-checkout Electron development shell for DeepSeek Harness",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^39.0.0"
+  }
+}

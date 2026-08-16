@@ -1,6 +1,6 @@
 /**
  * The three independent publish sequences this repository releases from
- * (`packages/` + `apps/`, `vendor/`, and `native/`) and the two this module
+ * (`packages/` + publishable `apps/`, `vendor/`, and `native/`) and the two this module
  * owns: `dsh` and `vendor`. Each family carries its own version baseline, tag
  * naming, and publish set, so releasing one never republishes another
  * ([rationale](../../.agents/notes/implemented/process/2026-08-10-npm-release-sequences.md)).
@@ -12,6 +12,7 @@
 import { globSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { validateTarballPayload } from '../publication-payload.ts'
+import { isNpmReleaseDirectory } from './workspace-members.ts'
 
 /** Dependency sections that constrain publish order: a consumer must publish after its dependency. */
 const ORDER_SECTIONS = ['dependencies', 'optionalDependencies'] as const
@@ -77,6 +78,15 @@ export abstract class ReleaseFamily {
   abstract readonly tagPrefix: string
 
   /**
+   * Return whether a matched manifest directory belongs to this family.
+   * @param directory - Repository-relative package directory.
+   * @returns True when discovery includes the manifest.
+   */
+  protected includesDirectory(_directory: string): boolean {
+    return true
+  }
+
+  /**
    * Discover this family's members.
    * @param root - repository root.
    * @returns Members sorted by directory, with names validated and deduplicated.
@@ -89,6 +99,8 @@ export abstract class ReleaseFamily {
     const seen = new Set<string>()
     for (const manifestPath of manifestPaths) {
       const normalized = manifestPath.replaceAll('\\', '/')
+      const directory = normalized.slice(0, normalized.length - '/package.json'.length)
+      if (!this.includesDirectory(directory)) continue
       const manifest = readManifest(resolve(root, manifestPath))
       const name = requireString(manifest, 'name', normalized)
       const version = requireString(manifest, 'version', normalized)
@@ -97,12 +109,13 @@ export abstract class ReleaseFamily {
       if (seen.has(name)) throw new Error(`${name} appears twice in release family ${this.id}`)
       seen.add(name)
       members.push({
-        directory: normalized.slice(0, normalized.length - '/package.json'.length),
+        directory,
         name,
         version,
         manifest,
       })
     }
+    if (members.length === 0) throw new Error(`release family ${this.id} matched no release members`)
     return members
   }
 
@@ -193,11 +206,16 @@ export abstract class ReleaseFamily {
   abstract readonly installedEntry: InstalledEntry | undefined
 }
 
-/** `packages/*` and `apps/*`: one shared version across the whole family. */
+/** `packages/*` and publishable `apps/*`: one shared version across the whole family. */
 class DshFamily extends ReleaseFamily {
   readonly id = 'dsh'
   readonly patterns = ['packages/*/*/package.json', 'apps/*/package.json'] as const
   readonly tagPrefix = 'dsh-v'
+
+  /** Keep private source-only applications outside every dsh release operation. */
+  protected override includesDirectory(directory: string): boolean {
+    return isNpmReleaseDirectory(directory)
+  }
 
   /**
    * Require one version across the family, the way a single tag can name it.

@@ -1,8 +1,10 @@
 /** Release family discovery, publish order, tag naming, and the bump judgements. */
 
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { releaseFamily, type ReleaseMember } from './families.ts'
 import { compareVersions, nextVendorVersion, reachesPayload } from './bump.ts'
+import { isLocalOnlyApplication, isNpmReleaseDirectory, npmReleaseWorkspaceFilters } from './workspace-members.ts'
 
 /**
  * A release member standing in for a manifest on disk.
@@ -16,6 +18,26 @@ function member(directory: string, name: string, manifest: Record<string, unknow
 }
 
 describe('release families', () => {
+  it('keeps the private desktop source shell outside every npm release path', () => {
+    const root = resolve(import.meta.dirname, '../..')
+    const directories = releaseFamily('dsh').members(root).map(entry => entry.directory)
+
+    expect(isLocalOnlyApplication('apps/desktop')).toBe(true)
+    expect(isLocalOnlyApplication('.\\apps\\desktop\\')).toBe(true)
+    expect(isNpmReleaseDirectory('apps/desktop')).toBe(false)
+    expect(isNpmReleaseDirectory('apps/cli')).toBe(true)
+    expect(isNpmReleaseDirectory('packages/core/session')).toBe(true)
+    expect(directories).toContain('apps/cli')
+    expect(directories).toContain('apps/web')
+    expect(directories).not.toContain('apps/desktop')
+    expect(npmReleaseWorkspaceFilters()).toEqual([
+      './vendor/**',
+      './packages/**',
+      './apps/**',
+      '!./apps/desktop',
+    ])
+  })
+
   it('names one tag for the whole dsh family and one per vendored package', () => {
     const dsh = releaseFamily('dsh')
     const vendor = releaseFamily('vendor')
