@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-deepseek-text-projection-for-image-history.md
+2026-08-14-deepseek-text-projection-for-image-history.md: 7e0d81b1d1214bee3e8a7ac3efd194c3fd80b7c2
+2026-08-14-deepseek-text-projection-for-image-history.zh.md: 474816d90e3f3bc50cce75c6741e7bfc4355ef02

@@ -63,6 +63,8 @@ import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
 import * as ToolWorkflow from '@deepseek-ai/dsh-tool-workflow'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
+import * as VisionBridgePlugin from '@deepseek-ai/dsh-llm-vision-bridge'
 import { githubSlug } from './verify-md-links.ts'
 
 /** Attachment seam marker that makes the attachments-conditional `read_image` schema harvestable. */
@@ -550,6 +552,21 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-llm-vision-bridge',
+    dir: 'llm-vision-bridge',
+    source: 'packages/llm/llm-vision-bridge/src/tool.ts',
+    requires: ['ctx.tools', 'ctx.llm', 'ctx.fs and ctx.attachments at execution time'],
+    writes: ['tool/call', 'durable attachment (execution)', 'tool/result'],
+    async mount(ctx) {
+      // The bridge service only needs the LLM seam at registration; the vision
+      // route is resolved per description call, so no adapter is mounted here.
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(VisionBridgePlugin, { provider: 'vision', model: 'vision-model' })
+    },
+    note:
+      'describe_image is the vision-bridge companion of read_image for text-only routes: it reads a workspace image, saves it durably, and returns the configured vision model\'s text description. The bridge row ships disabled; a deployment enables it with its own provider/model route.',
   },
 ]
 

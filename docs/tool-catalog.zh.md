@@ -41,6 +41,7 @@
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`、`owning Agent session` | `tool/call`、`todo/write`、`tool/result` | - | todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为检查清单。`allowParallelInProgress` 是没有默认值的必填项，因此本目录明确选择 `true`，对应描述允许同时存在多个 `in_progress` 项。选择 `false` 的部署会获得同一工具，但描述会要求只能有 1 个活动任务。 |
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`、`ctx.workflowEngine`、`ctx.systemPrompt`、`a calling Agent (exec.agent parents the script children)` | `tool/call`、`tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`、`web_search` | `ctx.tools`、`ctx.web`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。 |
+| `@deepseek-ai/dsh-llm-vision-bridge` | `describe_image` | `ctx.tools`、`ctx.llm`、`ctx.fs and ctx.attachments at execution time` | `tool/call`、`durable attachment (execution)`、`tool/result` | - | describe_image 是 read_image 在纯文本路由下的识图桥伴侣：读取工作区图片、持久化保存后返回配置识图模型的文字描述。桥行默认禁用；部署方以自己的 provider/model 路由启用。 |
 
 <a id="deepseek-aidsh-tool-ask-user"></a>
 
@@ -1876,3 +1877,34 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
 来源：[`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。
+
+<a id="deepseek-aidsh-llm-vision-bridge"></a>
+
+## `@deepseek-ai/dsh-llm-vision-bridge`
+
+### `describe_image`
+
+通过配置的识图模型描述一个 PNG/JPEG/WebP/GIF 图片文件，返回文字描述。当前模型无法直接看图时用它理解图片，例如读取截图中的文字或报错。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "description": "Path to the image file, resolved by the filesystem backend."
+    },
+    "question": {
+      "type": "string",
+      "description": "Optional specific question about the image, e.g. \"transcribe every error message\". Omit for a full description."
+    }
+  },
+  "required": [
+    "file_path"
+  ]
+}
+```
+
+来源：[`packages/llm/llm-vision-bridge/src/tool.ts`](../packages/llm/llm-vision-bridge/src/tool.ts)
+
+describe_image 是 read_image 在纯文本路由下的识图桥伴侣：读取工作区图片、持久化保存后返回配置识图模型的文字描述。桥行默认禁用；部署方以自己的 provider/model 路由启用。

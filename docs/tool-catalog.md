@@ -39,6 +39,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`, `owning Agent session` | `tool/call`, `todo/write`, `tool/result` | - | todo_write is session-owned state; UIs render the latest todo/write event as a checklist. `allowParallelInProgress` is required with no default, so the catalog states its choice: `true`, whose description invites several `in_progress` items. A deployment choosing `false` receives the same tool with a description asking for exactly one active task. |
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`, `ctx.workflowEngine`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents the script children)` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`, `web_search` | `ctx.tools`, `ctx.web`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps. |
+| `@deepseek-ai/dsh-llm-vision-bridge` | `describe_image` | `ctx.tools`, `ctx.llm`, `ctx.fs and ctx.attachments at execution time` | `tool/call`, `durable attachment (execution)`, `tool/result` | - | describe_image is the vision-bridge companion of read_image for text-only routes: it reads a workspace image, saves it durably, and returns the configured vision model's text description. The bridge row ships disabled; a deployment enables it with its own provider/model route. |
 
 <a id="deepseek-aidsh-tool-ask-user"></a>
 
@@ -1871,3 +1872,34 @@ Search the web for current information. Returns an optional summary answer and a
 Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.
+
+<a id="deepseek-aidsh-llm-vision-bridge"></a>
+
+## `@deepseek-ai/dsh-llm-vision-bridge`
+
+### `describe_image`
+
+Describe a PNG/JPEG/WebP/GIF image file through the configured vision model and return the text description. Use it to understand images when the current model cannot read them directly, e.g. to read text or errors in a screenshot.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "description": "Path to the image file, resolved by the filesystem backend."
+    },
+    "question": {
+      "type": "string",
+      "description": "Optional specific question about the image, e.g. \"transcribe every error message\". Omit for a full description."
+    }
+  },
+  "required": [
+    "file_path"
+  ]
+}
+```
+
+Source: [`packages/llm/llm-vision-bridge/src/tool.ts`](../packages/llm/llm-vision-bridge/src/tool.ts)
+
+describe_image is the vision-bridge companion of read_image for text-only routes: it reads a workspace image, saves it durably, and returns the configured vision model's text description. The bridge row ships disabled; a deployment enables it with its own provider/model route.
