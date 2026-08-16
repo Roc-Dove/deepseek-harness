@@ -64,8 +64,9 @@ Every MCP tool has two names: the raw MCP name (sent on the wire in `tools/call`
 - On connect: plugin activation awaits `listTools()` and registers each tool via `ctx.tools.register()` under its public name before the composition starts its first turn. Initial connection, discovery, or registration failure is always logged; it rejects activation when `failOnStartupError` is true and otherwise activates with no tools.
 - Listens for `notifications/tools/list_changed` → re-syncs; a fetch-phase failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation and leaves no tools from that server.
 - Tool execute: `client.callTool({ name: rawName, arguments }, { signal })` with timeout + abort support—the public name is never sent to the server.
-- Canonical success is `{ content: JsonValue[], structuredContent? }`; complete JSON MCP blocks survive for programmatic callers. A supported advertised `outputSchema` validates `structuredContent`; unsupported schema vocabulary falls back to unconstrained `JsonValue`.
-- Native/model rendering keeps the existing text projection: text blocks join with newlines while image, audio, resource, and unsupported blocks become placeholders.
+- Canonical success is `{ content: JsonValue[], structuredContent? }`. Non-image MCP blocks remain unchanged except that a non-string `text` value is removed and renders as an explicit invalid-content placeholder. Each admitted image block is replaced by `{ type: "image", attachment }` after a durable save, so its base64 payload is not retained in the canonical value; `structuredContent` remains unchanged. A supported advertised `outputSchema` validates `structuredContent`; unsupported schema vocabulary falls back to unconstrained `JsonValue`.
+- Native/model rendering: text blocks preserve protocol order while audio, resource, unsupported, and unadmitted image blocks become placeholders. Admitted image blocks reach the model through durable attachments when the deployment mounts `attachments` and the calling route declares `image` input. Unsupported media, invalid bytes, and configured image-count or byte limits degrade the affected block with a warning; an attachment storage failure rejects the tool call.
+- MCP servers cannot supply local attachment capabilities. An incoming `attachment` field is stripped and warned without reading or resolving its ID. A block carrying image bytes must pass ordinary admission, and only the reference returned by that call's successful `saveImage()` can enter the canonical result or model context.
 - On disconnect/crash: the supervisor restarts the original server config with exponential backoff (`reconnect.initialDelayMs` doubling up to `reconnect.maxDelayMs`) and re-runs discovery on success — the recovered generation replaces the previous one, so tools neither duplicate nor leak. During the outage the last good generation stays registered; calls against it fail until recovery.
 - Reconnection is budgeted per outage: after `reconnect.maxAttempts` consecutive failures the server's tools are unregistered and reconnection stops until an HMR reload or Host restart. A connection that survives past `maxDelayMs` resets the budget, so an occasionally-crashing server recovers indefinitely while a crash-looping one — even with briefly successful connects — still exhausts the cap instead of restarting forever.
 - Reconnect states are user-visible in logs: reconnecting (warn, with attempt count and delay), recovered (info), final failure and disabled-loss (error). Disposal cancels any pending reconnect. With `reconnect.enabled: false`, a lost connection keeps tools registered but failing until a reload — the manual-recovery behavior.
@@ -75,6 +76,8 @@ Every MCP tool has two names: the raw MCP name (sent on the wire in `tools/call`
 | Service | Usage |
 |---|---|
 | `ctx.tools` | Register/unregister MCP tools |
+| `ctx.attachments` (optional) | Durably commit image blocks so they enter model context; absent → image placeholders |
+| `ctx.llm` (optional) | Resolve the calling route's input modalities for the image gate; absent → image placeholders |
 
 ## Model Experience
 
@@ -96,11 +99,11 @@ Prefix-stable while the discovered tool set and schemas are unchanged. A re-sync
 
 #### What the model sees
 
-The public tool name and JSON arguments remain in assistant history. Text result blocks are joined with newlines into one retained Native text result; image, audio, resource, and unsupported blocks become short placeholders there. Their full JSON blocks and optional structured content remain in the execution-local canonical value, and MCP `isError` rejects the call through the registry's error path.
+The public tool name and JSON arguments remain in assistant history. Text result blocks preserve MCP protocol order; invalid text fields, audio, resource, unsupported, and unadmitted image blocks become short placeholders. Admitted image blocks are committed as durable attachments and retained as image blocks when the deployment mounts `attachments` and the calling route declares `image` input. The execution-local canonical value retains sanitized MCP blocks and optional structured content, while each admitted image contains an attachment reference instead of its original base64 payload. MCP `isError` and attachment storage failures reject the call through the registry's error path.
 
 #### Token effect
 
-Arguments and mapped text are retained until compaction. Binary and resource payloads are discarded rather than added to context.
+Arguments and mapped text are retained until compaction. Attached images are retained as durable attachment references (the bytes live in the attachment store, not the log); other binary and resource payloads are discarded rather than added to context.
 
 #### KV Cache effect
 
@@ -111,5 +114,5 @@ Append-only; newly visible content follows the reusable request prefix and does 
 - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer and are deferred.
 - **Startup timeout is inherited from the MCP SDK** — DSH does not yet expose a connection/discovery timeout. Each initialize or paginated `tools/list` request uses the SDK's 60-second default, so an unresponsive server or cursor chain can delay both activation and teardown while the initial synchronization settles.
 - **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request and through the SDK transport's own SSE-stream recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.
-- **Native non-text rendering is lossy** — image, audio, and resource payloads become placeholders in model context even though the execution-local canonical value preserves their JSON blocks. Richer Native multimedia projection is deferred.
+- **Audio and resource rendering is lossy** — those payloads become placeholders in model context even though the execution-local canonical value preserves their JSON blocks. Images attach and enter model context only when `attachments`, an image-capable route, supported bytes, and all configured image limits permit them; admitted image entries retain the attachment reference instead of MCP base64. Richer Native audio/resource projection is deferred.
 - **Unsupported MCP output schemas are not enforced** — `structuredContent` falls back to `JsonValue` when the advertised schema uses vocabulary outside the harness subset.

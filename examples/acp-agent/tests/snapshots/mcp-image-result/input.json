@@ -1,0 +1,18 @@
+{
+  "steps": [
+    {
+      "op": "initialize"
+    },
+    {
+      "op": "newSession"
+    },
+    {
+      "op": "waitForFile",
+      "path": ".mcp-image-ready"
+    },
+    {
+      "op": "prompt",
+      "text": "Call mcp__snapshot_image__render_chart with an empty object. Then reply with SEEN followed by the attachment ID you received."
+    }
+  ]
+}

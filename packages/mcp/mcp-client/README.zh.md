@@ -64,8 +64,9 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 - 连接时：插件激活会等待 `listTools()`，并在组合开始首个轮次前通过 `ctx.tools.register()` 以公开名称注册每个工具。初始连接、发现或注册失败始终会记录日志；`failOnStartupError` 为 true 时拒绝激活，否则插件仍会激活但不注册工具。
 - 监听 `notifications/tools/list_changed` → 重新同步；获取阶段失败时保留上一世代的注册，注册冲突则会回滚本次尝试的世代，并且不保留该服务器的任何工具。
 - 工具执行：`client.callTool({ name: rawName, arguments }, { signal })`，支持超时 + 中止；公开名称绝不会发给服务器。
-- 规范成功值是 `{ content: JsonValue[], structuredContent? }`；完整的 JSON MCP 块会保留给编程调用方。受支持且已声明的 `outputSchema` 会验证 `structuredContent`；不受支持的 schema 词汇会回退为不受约束的 `JsonValue`。
-- Native／模型渲染保留现有文本投影：文本块以换行连接，图片、音频、资源和不受支持的块会变成占位符。
+- 规范成功值是 `{ content: JsonValue[], structuredContent? }`。非图片 MCP 块保持不变，但非字符串 `text` 值会被移除，并渲染为明确的无效内容占位符。每个通过准入的图片块在持久化保存后会替换为 `{ type: "image", attachment }`，因此其 base64 载荷不会保留在规范值中；`structuredContent` 保持不变。受支持且已声明的 `outputSchema` 会验证 `structuredContent`；不受支持的 schema 词汇会回退为不受约束的 `JsonValue`。
+- Native／模型渲染按协议顺序保留文本块；音频、资源、不受支持的块和未通过准入的图片块会变成占位符。部署挂载 `attachments` 且调用路由声明支持 `image` 输入时，通过准入的图片块会通过持久化附件进入模型。媒体类型不受支持、图片字节无效，或触发图片数量／字节限制时，受影响的块会降级并记录警告；附件存储失败会使工具调用失败。
+- MCP 服务器不能提供本地附件能力。入站 `attachment` 字段会被剥离并记录警告，且不会读取或解析其中的 ID。携带图片字节的块必须重新经过普通准入，只有该次调用成功执行 `saveImage()` 后返回的引用才能进入规范结果或模型上下文。
 - 断开／崩溃时：supervisor 以指数退避（`reconnect.initialDelayMs` 逐次翻倍，上限 `reconnect.maxDelayMs`）重启原始服务器配置，成功后重新执行发现——恢复的世代会替换前一个，因此工具既不会重复也不会泄漏。中断期间最后一个正常世代保持注册；针对它的调用在恢复前会失败。
 - 重连按中断预算控制：连续失败达到 `reconnect.maxAttempts` 次后，该服务器的工具会被注销，重连停止，直到 HMR 重载或重启 Host。连接存活超过 `maxDelayMs` 会重置预算，因此偶尔崩溃的服务器可以无限恢复，而崩溃循环的服务器——即使短暂连接成功——仍会耗尽上限而非永远重启。
 - 重连状态在日志中对用户可见：reconnecting（warn，含尝试次数和延迟）、recovered（info）、最终失败和 disabled-loss（error）。dispose（资源释放）会取消任何待执行的重连。设置 `reconnect.enabled: false` 时，连接丢失后工具保持注册但调用失败，直到重载——即手动恢复行为。
@@ -75,6 +76,8 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 | 服务 | 用途 |
 |---|---|
 | `ctx.tools` | 注册／注销 MCP 工具 |
+| `ctx.attachments`（可选） | 持久化图片块，使其进入模型上下文；缺失时使用图片占位符 |
+| `ctx.llm`（可选） | 解析调用路由的输入模态以执行图片准入；缺失时使用图片占位符 |
 
 ## 模型体验
 
@@ -96,11 +99,11 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 
 #### 模型看到的内容
 
-公开工具名称和 JSON 参数会保留在 assistant 历史中。文本结果块会以换行连接为一个保留的 Native 文本结果；图片、音频、资源和不受支持的块在其中变为简短占位符。它们的完整 JSON 块及可选结构化内容保留在执行局部的规范值中；MCP `isError` 会通过注册表的错误路径拒绝调用。
+公开工具名称和 JSON 参数会保留在 assistant 历史中。文本结果块保留 MCP 协议顺序；无效文本字段、音频、资源、不受支持的块和未通过准入的图片块会变成简短占位符。部署挂载 `attachments` 且调用路由声明支持 `image` 输入时，通过准入的图片块会持久化为附件并作为图片块保留。执行局部的规范值保留经过清理的 MCP 块和可选结构化内容；通过准入的图片则以附件引用取代原始 base64 载荷。MCP `isError` 和附件存储失败会通过注册表的错误路径拒绝调用。
 
 #### Token 影响
 
-参数和映射后的文本会保留到压缩（compaction）发生时。二进制与资源载荷会被丢弃，而不会加入上下文。
+参数和映射后的文本会保留到压缩（compaction）发生时。已挂载图片保留持久化附件引用，图片字节存放在附件存储而非日志中；其他二进制与资源载荷会被丢弃，不会加入上下文。
 
 #### KV Cache 影响
 
@@ -111,5 +114,5 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 - **只桥接 MCP 的工具能力**：资源和提示词没有 harness 消费接口，暂缓实现。
 - **启动超时继承自 MCP SDK**：DSH 尚未公开连接／发现超时。每次 initialize 请求或分页 `tools/list` 请求都使用 SDK 默认的 60 秒，因此在初始同步完成期间，无响应的 server 或 cursor chain 可能同时延迟激活与 teardown。
 - **重连在传输关闭时触发**：崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败通过每次请求以及 SDK 传输自身的 SSE（Server-Sent Events）流恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。
-- **Native 非文本渲染有损**：图片、音频与资源载荷在模型上下文中会变成占位符，即使执行局部的规范值保留了其 JSON 块。更丰富的 Native 多媒体投影暂缓实现。
+- **音频与资源渲染有损**：这些载荷在模型上下文中会变成占位符，即使执行局部的规范值保留了其 JSON 块。只有同时具备 `attachments`、支持图片的路由、受支持字节和符合全部图片限制时，图片才会作为附件进入模型；通过准入的图片条目保留附件引用而非 MCP base64。更丰富的 Native 音频／资源投影暂缓实现。
 - **不强制执行不受支持的 MCP 输出 schema**：已声明 schema 使用 harness 子集之外的词汇时，`structuredContent` 会回退到 `JsonValue`。

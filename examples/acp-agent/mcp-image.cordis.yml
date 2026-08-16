@@ -1,0 +1,37 @@
+# Assembled MCP image scenario: the ordinary app composition is extended with
+# the durable attachment store and one external stdio MCP fixture. That fixture
+# is the only deterministic boundary substitute; Loader resolves the published
+# mcp-client package and every in-process runtime component normally.
+- id: base
+  name: '@deepseek-ai/cordis-plugin-include'
+  config:
+    path: ./cordis.yml
+    patches:
+      - id: acp-agent
+        name: '@deepseek-ai/dsh-acp-demo'
+        config:
+          provider: deepseek-official
+          model: deepseek-v4-flash
+          persistenceRoot: !!js process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? './.sessions'
+          persistenceCompression: none
+          workspaceContext:
+            maxBytes: 65536
+          persona: |
+            You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
+
+            Verify your work by running the code or tests. Keep answers brief and factual. Treat admitted MCP image results as model-visible attachments.
+      - insert:
+          - id: attachment-local
+            name: '@deepseek-ai/dsh-attachment-local'
+          - id: mcp-image
+            name: '@deepseek-ai/dsh-mcp-client'
+            config:
+              transport: stdio
+              serverName: snapshot_image
+              command: !!js process.execPath
+              args:
+                - !!js process.env.DSH_SNAPSHOT_MCP_IMAGE_SERVER ?? './mcp-image-fixture-server.mjs'
+              env: {}
+              cwd: !!js process.cwd()
+              toolCallTimeoutMs: 15000
+              failOnStartupError: true

@@ -40,6 +40,8 @@ const FS_CONFIG = fileURLToPath(new URL('../fs.cordis.yml', import.meta.url))
 const SESSION_QUERY_CONFIG = fileURLToPath(new URL('../session-query.cordis.yml', import.meta.url))
 const IMAGE_CONFIG = fileURLToPath(new URL('../image.cordis.yml', import.meta.url))
 const IMAGE_TEXT_ROUTE_CONFIG = fileURLToPath(new URL('../image-text-route.cordis.yml', import.meta.url))
+const MCP_IMAGE_CONFIG = fileURLToPath(new URL('../mcp-image.cordis.yml', import.meta.url))
+const MCP_IMAGE_FIXTURE_SERVER = fileURLToPath(new URL('../mcp-image-fixture-server.mjs', import.meta.url))
 const PTY_CONFIG = fileURLToPath(new URL('../pty.cordis.yml', import.meta.url))
 const DEPTH_TWO_CONFIG = fileURLToPath(new URL('../depth-two.cordis.yml', import.meta.url))
 const CHILD_QUESTION_CONFIG = fileURLToPath(new URL('../child-question.cordis.yml', import.meta.url))
@@ -211,6 +213,16 @@ const SCENARIOS: Scenario[] = [
     recorded: false,
     headerClass: 'image',
     configPath: IMAGE_TEXT_ROUTE_CONFIG,
+  },
+  {
+    name: 'mcp-image-result',
+    hasModelTurn: true,
+    recorded: false,
+    overridden: true,
+    pinsHeader: true,
+    headerClass: 'mcp-image',
+    configPath: MCP_IMAGE_CONFIG,
+    env: { DSH_SNAPSHOT_MCP_IMAGE_SERVER: MCP_IMAGE_FIXTURE_SERVER },
   },
   {
     name: 'pty-tools',
