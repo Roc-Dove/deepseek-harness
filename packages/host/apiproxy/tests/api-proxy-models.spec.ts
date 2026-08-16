@@ -19,6 +19,7 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
+import { imageDescriptionBlock } from '@deepseek-ai/dsh-llm'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { createApiProxy } from '../src/api-proxy.ts'
@@ -196,7 +197,7 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
-  it('refuses a text-only selection while durable or pending image content remains visible', async () => {
+  it('allows DeepSeek text projection but refuses other text-only selections while images remain visible', async () => {
     const { ctx, agent, sessionId } = await harness()
     registerTextOnly(ctx)
     const api = createApiProxy(ctx, {
@@ -210,6 +211,11 @@ describe('Web session model selection', () => {
     agent.session.append('user/message', {
       id: 'image-message', role: 'user', source: { kind: 'user' }, content: [image],
     } as never, { surfaceOp: 'append' })
+    expect(expectValue(await api.sessions.selectModel(request({
+      sessionId, provider: 'deepseek-official', model: 'deepseek-v4-pro',
+    }))).selected).toEqual({
+      provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high',
+    })
     expect((await api.sessions.selectModel(request({
       sessionId, provider: 'text-only', model: 'plain',
     }))).result).toMatchObject({ ok: false, error: { code: 'model-unavailable' } })
@@ -225,9 +231,142 @@ describe('Web session model selection', () => {
       id: 'pending-image', role: 'user', source: { kind: 'user' }, content: [image],
     } as never)
     expect((await api.sessions.selectModel(request({
+      sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash',
+    }))).result.ok).toBe(true)
+    expect((await api.sessions.selectModel(request({
       sessionId, provider: 'text-only', model: 'plain',
     }))).result.ok).toBe(false)
     ;(agent.inbox.nextTurn as UserMessage[]).length = 0
+    expect(expectValue(await api.sessions.selectModel(request({
+      sessionId, provider: 'text-only', model: 'plain',
+    }))).selected).toEqual({ provider: 'text-only', model: 'plain' })
+    await ctx.fiber.dispose()
+  })
+
+  it('admits images to a text-only selection by describing them through the vision bridge', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    registerTextOnly(ctx)
+    const saveImage = vi.fn((input: { data: Uint8Array; mediaType: 'image/png'; name?: string }) => Promise.resolve({
+      attachmentId: `att-${String(input.data[0])}`,
+      mediaType: input.mediaType,
+      bytes: input.data.byteLength,
+      width: 1,
+      height: 1,
+      ...input.name === undefined ? {} : { name: input.name },
+    }))
+    ctx.provide('attachments', {
+      imageLimits: {
+        maxImageBytes: 4,
+        maxImagesPerMessage: 2,
+        maxMessageImageBytes: 4,
+        maxImagePixels: 4,
+        mediaTypes: ['image/png'],
+      },
+      validateImage: vi.fn(() => Promise.resolve()),
+      saveImage,
+    } as never)
+    const describeImage = vi.fn(async (_ref: unknown) => 'bridge description')
+    ctx.provide('visionBridge', { describeTimeoutMs: 1000, describeImage } as never)
+    const followup = vi.fn()
+    Object.assign(agent, { followup })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'text-only', model: 'plain' }),
+      cwd: '/tmp',
+    })
+
+    const result = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [
+        { type: 'image' as const, mediaType: 'image/png' as const, data: 'AQ==', name: 'first.png' },
+        { type: 'text' as const, text: 'explain' },
+      ],
+    }))
+    expect(result.result.ok).toBe(true)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).content).toEqual([
+      {
+        type: 'image',
+        attachment: {
+          attachmentId: 'att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'first.png',
+        },
+      },
+      imageDescriptionBlock({
+        attachmentId: 'att-1' as never,
+        mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'first.png',
+      }, 'bridge description'),
+      { type: 'text', text: 'explain' },
+    ])
+    expect(describeImage).toHaveBeenCalledTimes(1)
+    expect(describeImage.mock.calls[0]?.[0]).toMatchObject({ attachmentId: 'att-1' })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects images when the selection is text-only and no vision bridge is composed', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    registerTextOnly(ctx)
+    const followup = vi.fn()
+    Object.assign(agent, { followup })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'text-only', model: 'plain' }),
+      cwd: '/tmp',
+    })
+
+    const result = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [
+        { type: 'image' as const, mediaType: 'image/png' as const, data: 'AQ==' },
+        { type: 'text' as const, text: 'explain' },
+      ],
+    }))
+    expect(result.result).toMatchObject({
+      ok: false,
+      error: { code: 'attachment-error', details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' } },
+    })
+    expect(followup).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
+  it('refuses uncovered image history even when the vision bridge is composed', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    registerTextOnly(ctx)
+    ctx.provide('visionBridge', { describeTimeoutMs: 1000, describeImage: vi.fn() } as never)
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    agent.session.append('user/message', {
+      id: 'image-message', role: 'user', source: { kind: 'user' },
+      content: [{
+        type: 'image' as const,
+        attachment: { attachmentId: 'att-history', mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 },
+      }],
+    } as never, { surfaceOp: 'append' })
+    expect((await api.sessions.selectModel(request({
+      sessionId, provider: 'text-only', model: 'plain',
+    }))).result).toMatchObject({ ok: false, error: { code: 'model-unavailable' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('allows text-only selection only when every historical image has its controlled durable description', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    registerTextOnly(ctx)
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    const attachment = {
+      attachmentId: 'att-described' as never,
+      mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1,
+    }
+    agent.session.append('user/message', {
+      id: 'described-image-message', role: 'user', source: { kind: 'user' },
+      content: [
+        { type: 'image' as const, attachment },
+        imageDescriptionBlock(attachment, 'durable description'),
+      ],
+    } as never, { surfaceOp: 'append' })
+
     expect(expectValue(await api.sessions.selectModel(request({
       sessionId, provider: 'text-only', model: 'plain',
     }))).selected).toEqual({ provider: 'text-only', model: 'plain' })

@@ -7,7 +7,7 @@ import type {
   SaveImageAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import LlmRuntime, { createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, imageDescriptionBlock, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -803,6 +803,26 @@ describe('provider profile lifecycle', () => {
         source: { kind: 'plugin', plugin: 'test' },
       })],
     })).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
+  })
+
+  it('sends description text but no image content to a text-only provider route', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [
+          { type: 'image', attachment: IMAGE_REF },
+          imageDescriptionBlock(IMAGE_REF, 'adapter-level description'),
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    const wire = JSON.stringify(server.requests[0])
+    expect(wire).toContain('[image-description]\\nadapter-level description')
+    expect(wire).not.toContain('"type":"image"')
   })
 
   it('validates profiles at the shared resolver boundary', () => {

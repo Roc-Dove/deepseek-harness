@@ -1,0 +1,19 @@
+# Keyless assembled image-admission scenario. The shipped vision row stays an
+# opt-in: this test overlay enables it against a model adapter installed by the
+# test as the external nondeterministic boundary. The DeepSeek route points at
+# a loopback SSE server so its real serializer and transport remain in path.
+- id: vision-bridge
+  config:
+    provider: snapshot-vision
+    model: snapshot-vision-model
+    describePrompt: Describe the image for the text-only main model.
+    maxTokens: 64
+    describeTimeoutMs: 5000
+  disabled: false
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DSH_VISION_SNAPSHOT_DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DSH_VISION_SNAPSHOT_DEEPSEEK_BASE_URL
+    thinking: disabled
+    reasoningEffort: off
+    maxTokens: 64

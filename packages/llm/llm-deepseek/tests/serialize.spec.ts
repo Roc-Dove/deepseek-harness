@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, CallId, ReasoningEffortId, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { serializeMessages, serializeRequest } from '../src/serialize.ts'
+import { IMAGE_OMITTED_TEXT, serializeMessages, serializeRequest } from '../src/serialize.ts'
 
 function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
   return { provider: 'deepseek-official', model: 'deepseek-v4-flash', messages: [], ...overrides }
@@ -133,17 +133,49 @@ describe('serializeMessages', () => {
     expect(wire).toEqual([{ role: 'user', content: 'see chart' }])
   })
 
-  it('rejects image blocks instead of silently flattening them away', () => {
-    expect(() => serializeMessages([createUserMessage({
+  it('projects image blocks to a stable placeholder while preserving adjacent text', () => {
+    expect(serializeMessages([createUserMessage({
       content: [{
         type: 'image',
         attachment: {
           attachmentId: AttachmentId(`sha256:${'a'.repeat(64)}`),
           mediaType: 'image/png', bytes: 68, width: 1, height: 1,
         },
+      }, { type: 'text', text: 'describe the earlier result' }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])).toEqual([{ role: 'user', content: `${IMAGE_OMITTED_TEXT}describe the earlier result` }])
+  })
+
+  it('never turns a pure-image user message into meaningless empty content', () => {
+    expect(serializeMessages([createUserMessage({
+      content: [{
+        type: 'image',
+        attachment: {
+          attachmentId: AttachmentId(`sha256:${'b'.repeat(64)}`),
+          mediaType: 'image/png', bytes: 68, width: 1, height: 1,
+        },
       }],
       source: { kind: 'plugin', plugin: 'test' },
-    })])).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }))
+    })])).toEqual([{ role: 'user', content: IMAGE_OMITTED_TEXT }])
+  })
+
+  it('uses the same image placeholder inside tool results', () => {
+    expect(serializeMessages([createUserMessage({
+      content: [{
+        type: 'tool-result',
+        toolCallId: CallId('image-result'),
+        content: [{
+          type: 'image',
+          attachment: {
+            attachmentId: AttachmentId(`sha256:${'c'.repeat(64)}`),
+            mediaType: 'image/png', bytes: 68, width: 1, height: 1,
+          },
+        }],
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])).toEqual([{
+      role: 'tool', tool_call_id: 'image-result', content: IMAGE_OMITTED_TEXT,
+    }])
   })
 
   it('emits an empty user message rather than dropping block-less messages', () => {

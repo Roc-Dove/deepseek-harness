@@ -99,6 +99,20 @@
     - id: api-gateway
       name: '@deepseek-ai/dsh-host-apiproxy'
 
+    # Image-to-text bridge: when the selected model cannot read images itself,
+    # admission describes every attached image through the configured
+    # vision-capable route and persists the text beside the image, and the
+    # `describe_image` tool answers on-demand image questions. Disabled by
+    # default; a deployment enables it with its own explicit route (the
+    # profile patch replaces the whole config, e.g. provider/model from a
+    # `llm-pi-ai` settings profile).
+    - id: vision-bridge
+      name: '@deepseek-ai/dsh-llm-vision-bridge'
+      disabled: true
+      config:
+        provider: ''
+        model: ''
+
     - id: cordis-host-runner
       name: '@deepseek-ai/dsh-cordis-host-runner'
 

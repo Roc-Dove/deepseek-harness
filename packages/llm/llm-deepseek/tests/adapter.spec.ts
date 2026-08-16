@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import LlmRuntime, { createUserMessage,
   CONTEXT_WINDOW_EXCEEDED_CODE,
@@ -17,6 +18,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
 import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import { httpErrorCode } from '../src/adapter.ts'
+import { IMAGE_OMITTED_TEXT } from '../src/serialize.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 import type { Behavior } from './mock-server.ts'
@@ -106,6 +108,56 @@ describe('DeepSeekAdapter against a mock server', () => {
       kinds.push(chunk.type)
     }
     expect(kinds).toEqual(['block-start', 'text-delta', 'block-end', 'usage', 'finish'])
+  })
+
+  it('sends a stable text placeholder for pure-image history', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const ctx = await harness(server.url)
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{
+          type: 'image',
+          attachment: {
+            attachmentId: AttachmentId(`sha256:${'a'.repeat(64)}`),
+            mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+          },
+        }],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    })
+
+    expect(server.requests[0]).toMatchObject({
+      messages: [{ role: 'user', content: IMAGE_OMITTED_TEXT }],
+    })
+  })
+
+  it('turns a malformed initial tool-call identity into an error finish before any tool chunk', async () => {
+    const server = await mockServer([{ kind: 'sse', events: [
+      '{"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":""}}]}',
+      '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"bash","arguments":"{}"}}]}}]}',
+      '[DONE]',
+    ] }])
+    const ctx = await harness(server.url)
+
+    const chunks = []
+    for await (const chunk of ctx.llm.stream({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      messages: [],
+    })) chunks.push(chunk)
+
+    expect(chunks).toEqual([{
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          code: 'MALFORMED_RESPONSE',
+          message: 'malformed tool call at index 0: first delta requires non-blank id and function.name',
+        },
+      },
+    }])
   })
 
   it('forwards the harness user and session ids for host-side trajectory routing', async () => {

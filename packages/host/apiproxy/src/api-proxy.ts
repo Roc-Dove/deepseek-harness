@@ -12,7 +12,14 @@ import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatu
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  contentHasImage,
+  createUserMessage,
+  freezeMessage,
+  hasCompleteImageDescriptionCoverage,
+  imageDescriptionBlock,
+  ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
@@ -185,6 +192,41 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
     blocks.push({ type: 'image', attachment })
   }
   return blocks
+}
+
+/**
+ * Describe every image block through the composed vision bridge, keeping the
+ * image block and appending its model-visible description text after it, so
+ * the text-only route consumes the image as text while the UI still renders it.
+ * @param ctx - context reading the optional vision bridge service.
+ * @param blocks - durable prompt content already committed to attachment storage.
+ * @returns the content with one description text block after each image block.
+ */
+async function describeImageBlocks(ctx: Context, blocks: ContentBlock[]): Promise<ContentBlock[]> {
+  const bridge = ctx.get('visionBridge')
+  if (bridge === undefined) {
+    throw new AttachmentError(
+      'Image admission requires the vision bridge, which is no longer available.',
+      'VISION_BRIDGE_UNAVAILABLE',
+    )
+  }
+  const described: ContentBlock[] = []
+  for (const block of blocks) {
+    described.push(block)
+    if (block.type !== 'image') continue
+    try {
+      const description = await bridge.describeImage(block.attachment, {
+        signal: AbortSignal.timeout(bridge.describeTimeoutMs),
+      })
+      described.push(imageDescriptionBlock(block.attachment, description))
+    } catch (error: unknown) {
+      throw new AttachmentError(
+        `Image description failed: ${error instanceof Error ? error.message : String(error)}`,
+        'VISION_DESCRIPTION_FAILED',
+      )
+    }
+  }
+  return described
 }
 
 /** Search durable content for an image reference, including nested tool results. */
@@ -2292,16 +2334,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 ? {}
                 : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
             })
-            const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
-              .some(message => contentHasImage(message.content))
-            if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
+            const pending = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
+            const history = found.agent.session.deriveMessages()
+            const pendingImage = pending.some(message => contentHasImage(message.content))
+            const historyImage = messagesHaveImage(history)
+            // The official DeepSeek adapter deliberately projects mixed history to text on its
+            // text-only wire route. A different text-only route is safe only when every visible
+            // image carries the bridge-authored durable description for that exact attachment;
+            // service presence alone says nothing about older history.
+            if (resolved.provider !== 'deepseek-official' && (pendingImage || historyImage)) {
               const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model)
               if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'model-unavailable',
-                  message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
-                  details: { provider, model },
-                })
+                if (!hasCompleteImageDescriptionCoverage([...history, ...pending])) {
+                  return err(request, {
+                    code: 'model-unavailable',
+                    message: `Model "${resolved.model}" does not accept image input, and this session contains images without durable descriptions; select an image-capable model.`,
+                    details: { provider, model },
+                  })
+                }
               }
             }
             const selected: ModelSelection = {
@@ -2482,19 +2532,27 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const hasImage = content.some(part => part.type === 'image')
         const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
           try {
+            let describeAdmittedImages = false
             if (hasImage) {
               const current = selectionFor(agent).current
               const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
               if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'attachment-error',
-                  message: `Model "${current.model}" does not support image input.`,
-                  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
-                })
+                if (ctx.get('visionBridge') === undefined) {
+                  return err(request, {
+                    code: 'attachment-error',
+                    message: `Model "${current.model}" does not support image input.`,
+                    details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+                  })
+                }
+                // The vision bridge describes every admitted image below, so the
+                // text-only route still consumes them as model-visible text.
+                describeAdmittedImages = true
               }
             }
             const durable = await durablePromptContent(ctx, content)
-            const message: UserMessage = createUserMessage({ content: durable, source })
+            const message: UserMessage = describeAdmittedImages
+              ? createUserMessage({ content: await describeImageBlocks(ctx, durable), source })
+              : createUserMessage({ content: durable, source })
             if (mode === 'steer') agent.steer(message)
             else agent.followup(message)
           } catch (error: unknown) {

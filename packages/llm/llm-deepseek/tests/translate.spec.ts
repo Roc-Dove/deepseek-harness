@@ -123,6 +123,30 @@ describe('translate: tool calls', () => {
     ])
   })
 
+  it('preserves the first identity across empty placeholders and matching repeated values', async () => {
+    const chunks = await collect(translate(feed(
+      firstChunk,
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_stable', type: 'function', function: { name: 'bash', arguments: '' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: '', function: { name: '', arguments: '{"command"' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_stable', function: { name: 'bash', arguments: ':"pwd"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      DONE,
+    )))
+
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'tool-call-delta', index: 0, id: 'call_stable', name: 'bash', argumentsDelta: '' },
+      { type: 'tool-call-delta', index: 0, id: 'call_stable', name: 'bash', argumentsDelta: '{"command"' },
+      { type: 'tool-call-delta', index: 0, id: 'call_stable', name: 'bash', argumentsDelta: ':"pwd"}' },
+      {
+        type: 'block-end',
+        index: 0,
+        block: { type: 'tool-call', id: 'call_stable', name: 'bash', arguments: '{"command":"pwd"}' },
+      },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ])
+  })
+
   it('disambiguates parallel tool calls by wire index', async () => {
     const chunks = await collect(translate(feed(
       firstChunk,
@@ -312,19 +336,80 @@ describe('mapUsage', () => {
 })
 
 describe('translate: defensive tool-call branches', () => {
-  it('handles deltas that never carry id or name (empty-string fallbacks)', async () => {
-    const chunks = await collect(translate(feed(
-      firstChunk,
-      // Hypothetical lenient wire: argument fragments with no id/name at all.
-      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] },
-      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
-      DONE,
-    )))
-    expect(chunks).toEqual([
+  it.each([
+    ['missing id and name', { index: 0, function: { arguments: '{}' } }],
+    ['missing id', { index: 0, function: { name: 'f', arguments: '{}' } }],
+    ['missing name', { index: 0, id: 'c', function: { arguments: '{}' } }],
+    ['empty id', { index: 0, id: '', function: { name: 'f', arguments: '{}' } }],
+    ['empty name', { index: 0, id: 'c', function: { name: '', arguments: '{}' } }],
+    ['blank id', { index: 0, id: ' \t ', function: { name: 'f', arguments: '{}' } }],
+    ['blank name', { index: 0, id: 'c', function: { name: ' \n ', arguments: '{}' } }],
+  ])('rejects a first delta with %s before emitting a tool block', async (_case, toolCall) => {
+    const seen: StreamChunk[] = []
+    const drain = async (): Promise<void> => {
+      for await (const chunk of translate(feed(
+        firstChunk,
+        { choices: [{ delta: { tool_calls: [toolCall] } }] },
+        DONE,
+      ))) seen.push(chunk)
+    }
+
+    await expect(drain()).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+      message: 'malformed tool call at index 0: first delta requires non-blank id and function.name',
+    })
+    expect(seen).toEqual([])
+  })
+
+  it.each([
+    ['negative', -1],
+    ['fractional', 0.5],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 1],
+    ['string', '0'],
+    ['null', null],
+  ])('rejects a %s tool-call index without echoing its supplied value', async (_case, index) => {
+    const seen: StreamChunk[] = []
+    const drain = async (): Promise<void> => {
+      for await (const chunk of translate(feed(
+        firstChunk,
+        { choices: [{ delta: { tool_calls: [{ index, id: 'c', function: { name: 'f', arguments: '{}' } }] } }] },
+        DONE,
+      ))) seen.push(chunk)
+    }
+
+    await expect(drain()).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+      message: 'malformed tool call: index must be a non-negative safe integer',
+    })
+    expect(seen).toEqual([])
+  })
+
+  it('rejects one call id reused by a second wire index without echoing the id', async () => {
+    const reused = 'do-not-echo-this-id'
+    const seen: StreamChunk[] = []
+    const drain = async (): Promise<void> => {
+      for await (const chunk of translate(feed(
+        firstChunk,
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: reused, function: { name: 'one', arguments: '{}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 1, id: reused, function: { name: 'two', arguments: '{}' } }] } }] },
+        DONE,
+      ))) seen.push(chunk)
+    }
+
+    let failure: unknown
+    try {
+      await drain()
+    } catch (error: unknown) {
+      failure = error
+    }
+    expect(failure).toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+      message: 'malformed tool call at index 1: id duplicates another tool call',
+    })
+    expect((failure as Error).message).not.toContain(reused)
+    expect(seen).toEqual([
       { type: 'block-start', index: 0, blockType: 'tool-call' },
-      { type: 'tool-call-delta', index: 0, id: '', argumentsDelta: '{}' },
-      { type: 'block-end', index: 0, block: { type: 'tool-call', id: '', name: '', arguments: '{}' } },
-      { type: 'finish', reason: { kind: 'tool-calls' } },
+      { type: 'tool-call-delta', index: 0, id: reused, name: 'one', argumentsDelta: '{}' },
     ])
   })
 
@@ -338,13 +423,27 @@ describe('translate: defensive tool-call branches', () => {
     expect(chunks[1]).toEqual({ type: 'tool-call-delta', index: 0, id: 'c', name: 'f', argumentsDelta: '' })
   })
 
-  it('handles tool_call deltas with no function object at all', async () => {
-    const chunks = await collect(translate(feed(
-      firstChunk,
-      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c' }] } }] },
-      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
-      DONE,
-    )))
-    expect(chunks[1]).toEqual({ type: 'tool-call-delta', index: 0, id: 'c', argumentsDelta: '' })
+  it.each([
+    ['id', { id: 'other', function: { arguments: '{}' } }, 'non-empty id changed'],
+    ['name', { function: { name: 'other', arguments: '{}' } }, 'non-empty function.name changed'],
+  ])('rejects a conflicting continuation %s before emitting its delta', async (_field, continuation, message) => {
+    const seen: StreamChunk[] = []
+    const drain = async (): Promise<void> => {
+      for await (const chunk of translate(feed(
+        firstChunk,
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'f', arguments: '' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, ...continuation }] } }] },
+        DONE,
+      ))) seen.push(chunk)
+    }
+
+    await expect(drain()).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+      message: `malformed tool call at index 0: ${message} after the first delta`,
+    })
+    expect(seen).toEqual([
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'tool-call-delta', index: 0, id: 'c', name: 'f', argumentsDelta: '' },
+    ])
   })
 })
