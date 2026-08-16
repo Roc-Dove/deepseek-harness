@@ -776,9 +776,9 @@ async function persistSeedSession(
 }
 
 /**
- * Normalize an aria snapshot: uuid, cwd, workspace-basename, duration,
- * decode-throughput, and path-sensitive compaction estimates collapse to
- * stable tokens.
+ * Normalize an aria snapshot: uuid, cwd, workspace-basename, calendar date,
+ * duration, decode-throughput, and path-sensitive compaction estimates
+ * collapse to stable tokens.
  *
  * Throughput needs a token for the same reason durations do, and no fixture
  * can supply one: the figure divides a replayed step's output tokens by the
@@ -786,7 +786,7 @@ async function persistSeedSession(
  * on one machine (measured 69 → 70 tok/s) and swings wildly on a fast replay
  * (26333 tok/s for a 3 ms stream).
  */
-function normalizeAria(snapshot: string, workspaceCwd: string): string {
+export function normalizeAria(snapshot: string, workspaceCwd: string): string {
   // The session heading renders the workspace's basename, not the full
   // path, so both spellings must collapse to the token.
   const base = workspaceCwd.split('/').pop()!
@@ -812,6 +812,10 @@ function normalizeAria(snapshot: string, workspaceCwd: string): string {
     // format so goldens stay stable across midnight and year changes.
     .replace(/\d{4}年\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
     .replace(/\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
+    // Session-list metadata renders an English label with an unpadded
+    // year-month-day before the clock. Keep date and time as separate tokens
+    // so both midnight and timezone changes are deterministic.
+    .replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}(?=\s+\d{1,2}:\d{2})/g, '{{date}}')
     .replace(/(?<!\d)\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*[AP]M)?(?!\d)/gi, '{{clock}}')
     .replace(/(?<!\d)\d{2}:\d{2}(?!\d)/g, '{{clock}}')
 }

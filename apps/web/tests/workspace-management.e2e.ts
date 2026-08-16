@@ -7,8 +7,9 @@
 // flat "In one list" view with its persisted group-by preference, the session
 // hover card and row action menu, and the session archive round trip (row
 // menu → workspace.archiveSession RPC → durable global set → row hidden
-// across reload). Zero model calls: workspace.create/rename/archiveSession
-// are host RPCs with no model involvement, and the one session row the
+// across reload), and the archived-session settings recovery surface (golden
+// snapshot + workspace.unarchiveSession round trip). Zero model calls: the
+// workspace mutation RPCs have no model involvement, and the one session row the
 // flat/hover/menu/archive scenarios need comes from a seeded fixture (the
 // seeded-history seed reused verbatim — no new recording).
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -30,6 +31,7 @@ const SNAPSHOT_DIR = fileURLToPath(new URL('./snapshots/workspace-management', i
 const SEED = fileURLToPath(new URL('./snapshots/seeded-history/seed.jsonl', import.meta.url))
 const MODE = webSnapshotMode()
 const BROWSER_EXPECTED = join(SNAPSHOT_DIR, 'directory-browser.expected.md')
+const ARCHIVED_SESSIONS_EXPECTED = join(SNAPSHOT_DIR, 'archived-sessions.expected.md')
 const SEED_ID = 'workspace-management-web-e2e'
 // Both waits exceed ui-primitives' 200ms POINTER_GRACE_MS. Keep them above
 // that value if the shared setting changes.
@@ -594,7 +596,41 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
     // concern).
     expect(await page.getByText(rowTitle, { exact: true }).count()).toBe(0)
     expect(tripwire.pageErrors).toEqual([])
-  }, 90_000)
+
+    // The recovery surface: Settings → Archived sessions lists the hidden
+    // row. Activating it must unarchive before opening; otherwise the runtime
+    // immediately clears a selection that is still in the archive set.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Settings' })
+    await dialog.waitFor({ timeout: 10_000 })
+    await dialog.getByRole('button', { name: 'Archived sessions' }).click()
+    await dialog.getByText(rowTitle, { exact: true }).waitFor({ timeout: 10_000 })
+    const archivedSnapshot = await captureStableAria(page, '[role="dialog"]', scaffold.workspaceCwd)
+    await compareOrRefreshGolden(ARCHIVED_SESSIONS_EXPECTED, archivedSnapshot, MODE)
+    await dialog.getByRole('button', { name: `Open session “${rowTitle}”` }).click()
+    await expect.poll(
+      () => page.getByRole('dialog', { name: 'Settings' }).count(),
+      { timeout: 10_000 },
+    ).toBe(0)
+    expect([...scaffold.ctx.workspaceRegistry.archivedSessionIds]).toEqual([])
+    // The restored session returns to the Ungrouped bucket's browsing surface.
+    await expect.poll(() => page.getByText('Ungrouped', { exact: true }).count(), { timeout: 10_000 }).toBe(1)
+    const restoredUngroupedRow = page.getByText('Ungrouped', { exact: true }).locator('..').locator('..')
+    await expect.poll(async () => {
+      if (await restoredUngroupedRow.getAttribute('aria-expanded') !== 'true') {
+        await page.getByText('Ungrouped', { exact: true }).click()
+        await page.waitForTimeout(50)
+      }
+      return restoredUngroupedRow.getAttribute('aria-expanded')
+    }, { timeout: 5_000 }).toBe('true')
+    const restoredSessionRows = restoredUngroupedRow.locator('..').locator('[role="treeitem"]')
+      .filter({ has: page.locator(`button[aria-label="Session actions for ${rowTitle}"]`) })
+    await expect.poll(
+      () => restoredSessionRows.count(),
+      { timeout: 10_000 },
+    ).toBe(1)
+    expect(tripwire.pageErrors).toEqual([])
+  }, 120_000)
 
   it('opens folders with identical basenames as distinct workspaces', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-ws-duplicate-basename'))
@@ -619,8 +655,12 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
 
   it.skipIf(MODE === 'record')('issued zero model calls and stayed clean', async () => {
     expect(tripwire.warnings).toEqual([])
-    // The directory-browser aria golden is this spec's one owned artifact;
-    // the seed it reuses is owned (and inventory-guarded) by seeded-history.
-    await assertFixtureInventory(SNAPSHOT_DIR, ['.gitkeep', 'directory-browser.expected.md'])
+    // Both aria goldens are owned here; the seed this spec reuses is owned
+    // (and inventory-guarded) by seeded-history.
+    await assertFixtureInventory(SNAPSHOT_DIR, [
+      '.gitkeep',
+      'archived-sessions.expected.md',
+      'directory-browser.expected.md',
+    ])
   })
 })

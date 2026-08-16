@@ -68,6 +68,13 @@ export const zh = {
   'time.months': '{n}个月',
   'time.years': '{n}年',
   'time.ago': '{t}前',
+  'settings.archivedNav': '已归档会话',
+  'settings.archivedTitle': '已归档会话',
+  'settings.archivedIntro': '归档后的会话会从会话列表中隐藏。你可以在这里查看并恢复它们。',
+  'settings.archivedEmpty': '暂无已归档会话',
+  'settings.unarchive': '取消归档',
+  'settings.updatedAt': '更新于 {time}',
+  'settings.open.aria': '打开会话“{name}”',
 } satisfies Record<string, string>
 
 /** The workspace namespace key union. */
@@ -137,4 +144,11 @@ export const en = {
   'time.months': '{n}mo',
   'time.years': '{n}y',
   'time.ago': '{t} ago',
+  'settings.archivedNav': 'Archived sessions',
+  'settings.archivedTitle': 'Archived sessions',
+  'settings.archivedIntro': 'Archived sessions are hidden from the session list. Review and restore them here.',
+  'settings.archivedEmpty': 'No archived sessions yet',
+  'settings.unarchive': 'Unarchive',
+  'settings.updatedAt': 'Updated {time}',
+  'settings.open.aria': 'Open session “{name}”',
 } satisfies Record<WorkspaceKey, string>
