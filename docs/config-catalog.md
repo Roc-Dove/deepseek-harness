@@ -1162,6 +1162,30 @@ export type Config = Readonly<Record<string, never>>
 
 Source: [`packages/llm/llm-retry/src/index.ts:24`](../packages/llm/llm-retry/src/index.ts)
 
+<a id="deepseek-aidsh-llm-vision-bridge"></a>
+
+## `@deepseek-ai/dsh-llm-vision-bridge`
+
+Requires: `llm`
+
+```ts config-catalog
+/** Deployment configuration; `provider`/`model` are required so enabling the row without a route fails loud. */
+export interface Config {
+  /** Provider of the vision-capable route answering description requests. */
+  provider: string
+  /** Model of the vision-capable route; the bridge fails loud when it does not declare image input. */
+  model: string
+  /** Stable instruction every description call receives; defaults to {@link DEFAULT_DESCRIBE_PROMPT}. */
+  describePrompt?: string
+  /** Per-description output cap; defaults to {@link DEFAULT_MAX_TOKENS}. */
+  maxTokens?: number
+  /** Cooperative per-description budget; defaults to {@link DEFAULT_DESCRIBE_TIMEOUT_MS}. */
+  describeTimeoutMs?: number
+}
+```
+
+Source: [`packages/llm/llm-vision-bridge/src/index.ts:44`](../packages/llm/llm-vision-bridge/src/index.ts)
+
 <a id="deepseek-aidsh-lsp-stdio"></a>
 
 ## `@deepseek-ai/dsh-lsp-stdio`

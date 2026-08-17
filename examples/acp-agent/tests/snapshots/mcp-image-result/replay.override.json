@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "chunks",
+    "chunks": [
+      { "type": "block-start", "index": 0, "blockType": "tool-call" },
+      {
+        "type": "block-end",
+        "index": 0,
+        "block": {
+          "type": "tool-call",
+          "id": "mcp-image-call",
+          "name": "mcp__snapshot_image__render_chart",
+          "arguments": "{}"
+        }
+      },
+      { "type": "usage", "usage": { "inputTokens": 3, "outputTokens": 3 } },
+      { "type": "finish", "reason": { "kind": "tool-calls" } }
+    ]
+  },
+  {
+    "kind": "chunks",
+    "chunks": [
+      { "type": "block-start", "index": 0, "blockType": "text" },
+      {
+        "type": "block-end",
+        "index": 0,
+        "block": {
+          "type": "text",
+          "text": "SEEN {{fromRequest:(sha256:[0-9a-f]{64})}}"
+        }
+      },
+      { "type": "usage", "usage": { "inputTokens": 3, "outputTokens": 3 } },
+      { "type": "finish", "reason": { "kind": "stop" } }
+    ]
+  }
+]

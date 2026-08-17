@@ -142,8 +142,8 @@ A unified `execute` handler for all tools from one MCP server:
 
 1. Resolve `rawName` (the executor closes over it) and call `client.callTool({ name: rawName, arguments }, { signal: exec.signal })` with the configured timeout — the public name is never sent to the server.
 2. Map the result:
-   - Multiple `text` content blocks → join with `'\n'` into a single `TextBlock` (required: `flattenText` uses `join('')` without separator, so multiple blocks would lose inter-block boundaries).
-   - `image` content blocks → discard with a `ctx.logger.warn` (the harness has no image content block type; [drop-image Agent Note](../simplification/2026-07-04-drop-image-content-block.md)).
+   - A text-only projection joins multiple `text` content blocks with `'\n'` into one `TextBlock`; a rich projection retains their protocol order beside admitted images.
+   - `image` content blocks follow the optional durable attachment, route-modality, limit, placeholder, and fail-closed storage rules in the [MCP image-result projection decision](2026-08-16-mcp-image-result-attachment-projection.md).
    - `isError: true` → map to the harness `isError` result path (`{ content: [...], isError: true }`).
 3. Cancellation: `exec.signal` (from the agent loop's cancel) is passed through to the MCP SDK's `callTool`, which sends `$/cancelRequest` to the server.
 
@@ -194,8 +194,8 @@ Rejected. `flattenText()` in the DeepSeek serializer uses `join('')` (no separat
 Coverage is named per tier; each behavior lives at the cheapest tier that can express it.
 
 - **Unit** (`tests/mcp-client.spec.ts`, `tests/apply.spec.ts`, mocked MCP SDK): the `publicToolName` algorithm (clean, normalize, truncate-and-hash, determinism, distinct-identity separation), raw-vs-public wire discipline, cross-server and native-tool coexistence, duplicate-`serverName` load failure and reservation release, invalid-tool-list rejection, generation swap/rollback, failed-re-sync retention, result mapping, cancellation, config schema validation. 100% per-file coverage gates the package.
-- **E2E** (`tests/mcp-client.e2e.ts`, keyless): the real MCP protocol against the in-repo fixture server, `@modelcontextprotocol/server-everything`, and `@modelcontextprotocol/server-filesystem` over stdio, and against an in-process `StreamableHTTPServerTransport` server over Streamable HTTP — discovery under the namespace, dotted-name normalization end to end, execution round-trips, duplicate-`serverName` rejection, disposal.
-- **Snapshot**: deliberately none. MCP tools introduce no new presentation shape — they register as raw `ToolDefinition`s and UI consumers use the generic-card fallback already pinned by their presentation suites. Adding an MCP server to a runnable snapshot composition would mutate its pinned system-prompt fixture and make every replay depend on spawning an external MCP server process for no new behavior. If a later change gives MCP tools their own render intent, that change names its snapshot coverage then.
+- **E2E** (`tests/mcp-client.e2e.ts`, keyless): the real MCP protocol against the in-repo fixture server, `@modelcontextprotocol/server-everything`, and `@modelcontextprotocol/server-filesystem` over stdio, and against an in-process `StreamableHTTPServerTransport` server over Streamable HTTP — discovery under the namespace, dotted-name normalization end to end, execution round-trips, ordered multi-image result projection, duplicate-`serverName` rejection, disposal.
+- **Snapshot**: the baseline naming and generic-card decision adds no dedicated presentation snapshot. The later [image-result projection](2026-08-16-mcp-image-result-attachment-projection.md) adds a keyless assembled ACP transcript that carries the MCP image attachment into the subsequent model request.
 
 ## Consequences
 

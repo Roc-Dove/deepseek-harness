@@ -13,15 +13,23 @@ import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deeps
 import { DONE } from './sse.ts'
 import type { WireChunk, WireUsage } from './types.ts'
 
-/** One open block under assembly. */
-interface OpenBlock {
+/** One open text or reasoning block under assembly. */
+interface OpenTextBlock {
   index: number
-  kind: 'text' | 'reasoning' | 'tool-call'
+  kind: 'text' | 'reasoning'
   text: string
-  /** tool-call only */
-  callId?: string
-  name?: string
 }
+
+/** One open tool-call block whose durable identity was established by its first wire delta. */
+interface OpenToolCallBlock {
+  index: number
+  kind: 'tool-call'
+  text: string
+  callId: CallId
+  name: string
+}
+
+type OpenBlock = OpenTextBlock | OpenToolCallBlock
 
 /**
  * Map the wire finish_reason vocabulary to the harness FinishReason.
@@ -68,16 +76,31 @@ function closeBlock(block: OpenBlock): ContentBlock {
     case 'reasoning': return { type: 'reasoning', text: block.text }
     case 'tool-call': return {
       type: 'tool-call',
-      id: CallId(block.callId ?? ''),
-      name: block.name ?? '',
+      id: block.callId,
+      name: block.name,
       arguments: block.text,
     }
   }
 }
 
+/** Classify a provider tool-call identity violation without echoing model-supplied values. */
+function malformedToolCall(index: number | undefined, detail: string): LlmError {
+  const location = index === undefined ? '' : ` at index ${index}`
+  return new LlmError(`malformed tool call${location}: ${detail}`, 'MALFORMED_RESPONSE')
+}
+
+/** Accept only the protocol's non-negative integer tool-call index. */
+function validToolCallIndex(index: unknown): number {
+  if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) {
+    throw malformedToolCall(undefined, 'index must be a non-negative safe integer')
+  }
+  return index
+}
+
 /**
  * Consume SSE data payloads (ending with `[DONE]`) and yield StreamChunks.
- * Malformed JSON payloads abort the stream with `MALFORMED_RESPONSE`.
+ * Malformed JSON payloads or unstable/empty tool-call identities abort the stream with
+ * `MALFORMED_RESPONSE`.
  * @param payloads - SSE data payloads from {@link parseSse}, `[DONE]`-terminated.
  * @returns deltas as they arrive; `block-end`s, `usage`, and `finish` are all deferred to the `[DONE]` sentinel.
  *   A `stop` (or absent) finish with no opened blocks is a degenerate provider completion and maps to an
@@ -85,15 +108,16 @@ function closeBlock(block: OpenBlock): ContentBlock {
  */
 export async function* translate(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
-  let textBlock: OpenBlock | undefined
-  let reasoningBlock: OpenBlock | undefined
-  const toolBlocks = new Map<number, OpenBlock>()
+  let textBlock: OpenTextBlock | undefined
+  let reasoningBlock: OpenTextBlock | undefined
+  const toolBlocks = new Map<number, OpenToolCallBlock>()
+  const toolCallIds = new Map<string, number>()
   const order: OpenBlock[] = []
   let pendingFinish: FinishReason | undefined
   let pendingUsage: TokenUsage | undefined
 
-  function open(kind: OpenBlock['kind']): OpenBlock {
-    const block: OpenBlock = { index: nextIndex++, kind, text: '' }
+  function open(kind: OpenTextBlock['kind']): OpenTextBlock {
+    const block: OpenTextBlock = { index: nextIndex++, kind, text: '' }
     order.push(block)
     return block
   }
@@ -150,21 +174,49 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
       }
 
       for (const call of delta?.tool_calls ?? []) {
-        let block = toolBlocks.get(call.index)
+        const wireIndex = validToolCallIndex(call.index)
+        let block = toolBlocks.get(wireIndex)
         if (!block) {
-          block = open('tool-call')
-          toolBlocks.set(call.index, block)
+          const callId = call.id
+          const name = call.function?.name
+          if (typeof callId !== 'string' || callId.trim().length === 0
+            || typeof name !== 'string' || name.trim().length === 0) {
+            throw malformedToolCall(wireIndex, 'first delta requires non-blank id and function.name')
+          }
+          const existingIndex = toolCallIds.get(callId)
+          if (existingIndex !== undefined && existingIndex !== wireIndex) {
+            throw malformedToolCall(wireIndex, 'id duplicates another tool call')
+          }
+          block = {
+            index: nextIndex++,
+            kind: 'tool-call',
+            text: '',
+            callId: CallId(callId),
+            name,
+          }
+          order.push(block)
+          toolBlocks.set(wireIndex, block)
+          toolCallIds.set(callId, wireIndex)
           yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
+        } else {
+          // Some compatible gateways repeat empty identity placeholders on continuation
+          // deltas. Treat those like omitted fields, but reject a non-empty identity change.
+          if (call.id !== undefined && call.id !== ''
+            && (typeof call.id !== 'string' || call.id !== block.callId)) {
+            throw malformedToolCall(wireIndex, 'non-empty id changed after the first delta')
+          }
+          if (call.function?.name !== undefined && call.function.name !== ''
+            && (typeof call.function.name !== 'string' || call.function.name !== block.name)) {
+            throw malformedToolCall(wireIndex, 'non-empty function.name changed after the first delta')
+          }
         }
-        if (call.id !== undefined) block.callId = call.id
-        if (call.function?.name !== undefined) block.name = call.function.name
         const fragment = call.function?.arguments ?? ''
         block.text += fragment
         yield {
           type: 'tool-call-delta',
           index: block.index,
-          id: CallId(block.callId ?? ''),
-          ...block.name !== undefined ? { name: block.name } : {},
+          id: block.callId,
+          name: block.name,
           argumentsDelta: fragment,
         }
       }

@@ -26,6 +26,7 @@ let dist: string | undefined
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   internals.resolveDistIndex = originalResolve
   if (dist !== undefined) rmSync(dist, { recursive: true, force: true })
   dist = undefined
@@ -119,6 +120,25 @@ describe('web-app runtime glue', () => {
     const assembly = await ctx.systemPrompt.assemble()
     expect(assembly.sections.find(entry => entry.name === 'app:web-surface')?.text)
       .toContain('rebuilding the affected Web artifacts')
+    await ctx.fiber.dispose()
+  })
+
+  it('describes an installed desktop as immutable without exposing a checkout prompt', async () => {
+    vi.stubEnv('DSH_DESKTOP_DEPLOYMENT', 'packaged')
+    stageDist()
+    const ctx = new Context()
+    ctx.provide('webServer', fakeHttpServer().server)
+    apply(ctx, new Config({ printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    await ctx.plugin(SystemPrompt, { persona: '' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const assembly = await ctx.systemPrompt.assemble()
+    expect(assembly.sections.some(entry => entry.name === 'harness:source')).toBe(false)
+    const prompt = assembly.sections.find(entry => entry.name === 'app:web-surface')?.text
+    expect(prompt).toContain('installed DeepSeek Harness desktop application')
+    expect(prompt).toContain('immutable installation files')
+    expect(prompt).not.toContain('pnpm run dev:web')
+    expect(prompt).not.toContain('rebuilding the affected Web artifacts')
     await ctx.fiber.dispose()
   })
 

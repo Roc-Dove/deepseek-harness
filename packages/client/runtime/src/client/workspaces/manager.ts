@@ -51,6 +51,10 @@ export class WorkspaceManager {
    * mirror of replaying refreshFrames over the item baseline.
    */
   private archivedSupersedesRefresh = false
+  /** Latest local archive-set request; only its unary echo may install. */
+  private archivedRequestGeneration = 0
+  /** Increments on archive frames so a newer commit outranks an older unary echo. */
+  private archivedFrameGeneration = 0
   /** Latest local reorder request; only its unary echo may install order. */
   private orderRequestGeneration = 0
   /** Increments on order frames so a later remote commit outranks an older unary echo. */
@@ -226,8 +230,30 @@ export class WorkspaceManager {
    * @returns the wire result.
    */
   async archiveSession(sessionId: SessionId): Promise<RpcResult<{ archivedSessionIds: SessionId[] }>> {
+    const requestGeneration = ++this.archivedRequestGeneration
+    const frameGeneration = this.archivedFrameGeneration
     const { result } = await this.api.workspace.archiveSession({ sessionId })
-    if (result.ok) this.installArchived(result.value.archivedSessionIds)
+    if (result.ok && requestGeneration === this.archivedRequestGeneration
+      && frameGeneration === this.archivedFrameGeneration) {
+      this.installArchived(result.value.archivedSessionIds)
+    }
+    return result
+  }
+
+  /**
+   * Unarchive one session from the registry-global set, then install the
+   * returned full set without waiting for the changed frame.
+   * @param sessionId - session to restore.
+   * @returns the wire result.
+   */
+  async unarchiveSession(sessionId: SessionId): Promise<RpcResult<{ archivedSessionIds: SessionId[] }>> {
+    const requestGeneration = ++this.archivedRequestGeneration
+    const frameGeneration = this.archivedFrameGeneration
+    const { result } = await this.api.workspace.unarchiveSession({ sessionId })
+    if (result.ok && requestGeneration === this.archivedRequestGeneration
+      && frameGeneration === this.archivedFrameGeneration) {
+      this.installArchived(result.value.archivedSessionIds)
+    }
     return result
   }
 
@@ -244,6 +270,7 @@ export class WorkspaceManager {
       this.installOrder(envelope.payload.workspaceIds, true)
     }
     else if (envelope.payload.type === 'host/archived-sessions-changed') {
+      this.archivedFrameGeneration++
       this.installArchived(envelope.payload.archivedSessionIds)
     }
   }

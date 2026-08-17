@@ -488,6 +488,64 @@ describe('WorkspaceRuntime', () => {
     expect(workspaces.list.getSnapshot().archivedSessionIds).toEqual(['s-open'])
   })
 
+  it('unarchives a session and projects the returned set', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const sessions = new SessionRuntime(ctx, api, fakeRemote())
+    const workspaces = new WorkspaceRuntime(ctx, api, sessions)
+    api.onWorkspaceList = () => Promise.resolve(ok({
+      items: [],
+      archivedSessionIds: [sid('s-open'), sid('s-idle')],
+    }) as never)
+    await workspaces.refresh()
+    expect(workspaces.list.getSnapshot().archivedSessionIds).toEqual(['s-open', 's-idle'])
+
+    // The unary echo installs the returned set without waiting for a frame.
+    api.onWorkspaceUnarchiveSession = () => Promise.resolve(ok({ archivedSessionIds: [sid('s-idle')] }))
+    await expect(workspaces.unarchiveSession(sid('s-open'))).resolves.toBeUndefined()
+    expect(api.callsOf('workspace.unarchiveSession')).toEqual([{ sessionId: 's-open' }])
+    expect(workspaces.list.getSnapshot().archivedSessionIds).toEqual(['s-idle'])
+
+    // A Host failure leaves the set untouched and surfaces the wire error.
+    api.onWorkspaceUnarchiveSession = () => Promise.resolve(err({
+      code: 'internal', message: 'storage down', details: {},
+    }))
+    await expect(workspaces.unarchiveSession(sid('s-idle'))).rejects.toThrow(/storage down/)
+    expect(workspaces.list.getSnapshot().archivedSessionIds).toEqual(['s-idle'])
+  })
+
+  it('keeps newer archive frames and local requests ahead of stale unary echoes', async () => {
+    const api = new FakeApiClient()
+    api.onWorkspaceList = () => Promise.resolve(ok({
+      items: [], archivedSessionIds: [sid('initial')],
+    }) as never)
+    const manager = new WorkspaceManager(api)
+    await manager.refresh()
+
+    const frameRace = deferred<Awaited<ReturnType<FakeApiClient['onWorkspaceArchiveSession']>>>()
+    api.onWorkspaceArchiveSession = () => frameRace.promise
+    const pendingFrameRace = manager.archiveSession(sid('local'))
+    manager.handleHostEnvelope({
+      rpcId: 'newer-archive-frame' as never,
+      payload: { type: 'host/archived-sessions-changed', archivedSessionIds: [sid('remote')] },
+    })
+    frameRace.resolve(ok({ archivedSessionIds: [sid('initial'), sid('local')] }))
+    await pendingFrameRace
+    expect(manager.getSnapshot().archivedSessionIds).toEqual(['remote'])
+
+    const first = deferred<Awaited<ReturnType<FakeApiClient['onWorkspaceArchiveSession']>>>()
+    const second = deferred<Awaited<ReturnType<FakeApiClient['onWorkspaceUnarchiveSession']>>>()
+    api.onWorkspaceArchiveSession = () => first.promise
+    api.onWorkspaceUnarchiveSession = () => second.promise
+    const olderRequest = manager.archiveSession(sid('older'))
+    const newerRequest = manager.unarchiveSession(sid('remote'))
+    second.resolve(ok({ archivedSessionIds: [] }))
+    await newerRequest
+    first.resolve(ok({ archivedSessionIds: [sid('remote'), sid('older')] }))
+    await olderRequest
+    expect(manager.getSnapshot().archivedSessionIds).toEqual([])
+  })
+
   it('clears a current archived by a remote frame and shields the set from a stale in-flight baseline', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

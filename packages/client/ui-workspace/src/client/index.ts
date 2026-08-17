@@ -12,7 +12,11 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+// Type-only: the settings shell's SlotMap merge (the 'settings.section' entry).
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
+import { ArchivedSessionsSection } from './ArchivedSessionsSection.tsx'
+import type { ArchivedSessionsInjected } from './ArchivedSessionsSection.tsx'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './WorkspaceBrowser.tsx'
 import { WorkspacePicker } from './WorkspacePicker.tsx'
@@ -22,6 +26,7 @@ export type {
   DirectoryFlowOwnerProps, DirectoryFlowSlotName, DirectoryPickingHooks, DirectoryPickingInjected,
   WorkspaceBrowserInjected, WorkspaceBrowserProps, WorkspacePickerInjected, WorkspacePickerProps,
 } from './contract/slots.ts'
+export type { ArchivedSessionsInjected, ArchivedSessionsSectionProps } from './ArchivedSessionsSection.tsx'
 export type { WorkspaceKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -52,6 +57,7 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
+  const t = ctx.locale.bind(NS)
 
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await ctx.sessions.search(query, signal)
@@ -105,6 +111,12 @@ export function apply(ctx: ClientContext): void {
     createWorkspace: input => ctx.workspaces.create(input),
     hooks: { directoryFlow: pickerFlowSource },
   })
+  // The archive-recovery settings page: opens rows and restores their
+  // grouping position through the same actions the browser drives.
+  const archivedSectionInjected = (): ArchivedSessionsInjected => ({
+    open: (sessionId) => { ctx.sessions.open(sessionId) },
+    unarchiveSession: async (sessionId) => { await ctx.workspaces.unarchiveSession(sessionId) },
+  })
   // Each registration declares its directory-flow child in the same call;
   // slot injection follows both the owner and declaration HMR lifetimes.
   ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register(
@@ -125,5 +137,16 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
     },
     WorkspacePicker,
+  ))
+  ctx.slots.inject('settings.section', () => ctx.slots.register(
+    {
+      name: 'settings.section',
+      id: 'archived-sessions',
+      order: 20,
+      label: () => t('settings.archivedNav'),
+      locale: NS,
+      inject: archivedSectionInjected,
+    },
+    ArchivedSessionsSection,
   ))
 }

@@ -115,6 +115,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Adapters register provider implementations; the loop and compaction call the provider-neutral stream service.',
   },
   {
+    key: 'visionBridge',
+    pkg: 'llm-vision-bridge',
+    title: 'Image-to-text bridge',
+    mode: 'seam',
+    implementations: [],
+    consumers: ['host-apiproxy'],
+    note: 'The bridge describes durably stored images through a vision-capable model route so text-only models still consume image content.',
+  },
+  {
     key: 'tokenMeter',
     pkg: 'token-meter',
     title: 'Replay token measurement',

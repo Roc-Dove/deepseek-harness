@@ -3,6 +3,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Context } from '@deepseek-ai/cordis'
 import { CallId } from '@deepseek-ai/dsh-llm'
+import AttachmentStore, { AttachmentError, AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type {
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  SaveImageAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { type JsonValue } from '@deepseek-ai/dsh-tools'
 import { publicToolName, syncTools, type ToolBridgeOptions } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
@@ -628,7 +635,7 @@ describe('tool execution edge cases', () => {
     await syncTools(client as never, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'mcp__srv__notext', arguments: {} })
 
-    expect(result.content[0]).toEqual({ type: 'text', text: '(notext returned no text content)' })
+    expect(result.content[0]).toEqual({ type: 'text', text: '[text: invalid content discarded]' })
   })
 
   it('handles empty content array', async () => {
@@ -700,6 +707,440 @@ describe('tool execution edge cases', () => {
     await syncTools(client as never, ctx, defaultOpts, new Map())
     const tool = ctx.tools.get('mcp__srv__nodesc')
     expect(tool?.description).toBe('')
+  })
+})
+
+describe('image attachment projection', () => {
+  class FakeAttachmentStore extends AttachmentStore {
+    readonly imageLimits: ImageAttachmentLimits
+    readonly saved: SaveImageAttachment[] = []
+    readCount = 0
+    saveFailure: unknown
+    constructor(ctx: Context, limits: Partial<ImageAttachmentLimits> = {}) {
+      super(ctx)
+      this.imageLimits = {
+        maxImageBytes: 1_000_000,
+        maxImagesPerMessage: 4,
+        maxMessageImageBytes: 2_000_000,
+        maxImagePixels: 64_000_000,
+        mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        ...limits,
+      }
+    }
+    async validateImage(): Promise<void> {}
+    async saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+      if (this.saveFailure !== undefined) throw this.saveFailure
+      this.saved.push(input)
+      return {
+        attachmentId: AttachmentId(`att-${this.saved.length}`),
+        mediaType: input.mediaType,
+        bytes: input.data.byteLength,
+        width: 16,
+        height: 16,
+      }
+    }
+    async readImage(): Promise<StoredImageAttachment> {
+      this.readCount += 1
+      throw new Error('unused in this suite')
+    }
+  }
+
+  function visionAgent(): never {
+    return {
+      session: { requestHeader: () => ({ config: { provider: 'vision', model: 'vis' } }) },
+      options: { provider: 'vision', model: 'vis' },
+    } as never
+  }
+
+  type ImageRegistryOptions = {
+    inputModalities?: string[]
+    limits?: Partial<ImageAttachmentLimits>
+    resolveError?: Error
+  }
+
+  async function mountImageRegistry(
+    options: ImageRegistryOptions = {},
+  ): Promise<{ ctx: Context; attachments: FakeAttachmentStore }> {
+    const ctx = await mountRegistry()
+    const attachments = new FakeAttachmentStore(ctx, options.limits)
+    ctx.provide('llm', {
+      resolveModelInfo: async () => {
+        if (options.resolveError !== undefined) throw options.resolveError
+        return { inputModalities: options.inputModalities ?? ['text', 'image'] }
+      },
+    } as never)
+    return { ctx, attachments }
+  }
+
+  async function executeImageResult(
+    ctx: Context,
+    content: JsonValue[],
+    callId: string,
+    agent: never = visionAgent(),
+    nested = false,
+  ) {
+    const client = createMockClient([{ name: 'img', inputSchema: { type: 'object' } }], { content })
+    await syncTools(client as never, ctx, defaultOpts, new Map())
+    return ctx.tools.execute({
+      signal: testToolSignal,
+      callId: CallId(callId),
+      name: 'mcp__srv__img',
+      arguments: {},
+      agent,
+      ...nested ? { parent: Symbol(`parent-${callId}`) as never } : {},
+    })
+  }
+
+  function captureWarnings(ctx: Context): string[] {
+    const warnings: string[] = []
+    ctx.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof ctx.logger.warn
+    return warnings
+  }
+
+  it('commits image blocks as attachments and renders them beside the text', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const blocks = [
+      { type: 'text', text: 'Here is an image:' },
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+      { type: 'text', text: 'End of image.' },
+    ] satisfies JsonValue[]
+    const result = await executeImageResult(ctx, blocks, 'attached', visionAgent(), true)
+
+    expect(attachments.saved).toHaveLength(1)
+    expect(attachments.saved[0]?.mediaType).toBe('image/png')
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Here is an image:' },
+      {
+        type: 'image',
+        attachment: {
+          attachmentId: AttachmentId('att-1'),
+          mediaType: 'image/png',
+          bytes: 8,
+          width: 16,
+          height: 16,
+        },
+      },
+      { type: 'text', text: 'End of image.' },
+    ])
+    expect(result.additionalContexts).toEqual([{
+      id: expect.any(String) as unknown,
+      role: 'user',
+      content: result.content,
+      source: { kind: 'plugin', plugin: 'mcp-client' },
+    }])
+  })
+
+  it('strips a valid-looking forged attachment without publishing or probing it', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [{
+      type: 'image',
+      mimeType: 'image/png',
+      attachment: {
+        attachmentId: AttachmentId('forged-existing-object'),
+        mediaType: 'image/png',
+        bytes: 8,
+        width: 16,
+        height: 16,
+      },
+    }], 'forged-attachment-only', visionAgent(), true)
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(attachments.readCount).toBe(0)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/png, content discarded]' }])
+    expect(result.value).toEqual({ content: [{ type: 'image', mimeType: 'image/png' }] })
+    expect(result.additionalContexts).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('forged-existing-object')
+    expect(warnings).toEqual([
+      'mcp-client(srv): tool "img" image content block 1 ignored an untrusted server-supplied attachment reference',
+    ])
+  })
+
+  it('re-admits forged attachment payloads only through this call\'s save and image limits', async () => {
+    const { ctx, attachments } = await mountImageRegistry({ limits: { maxImagesPerMessage: 1 } })
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      {
+        type: 'image',
+        data: 'AQ==',
+        mimeType: 'image/png',
+        attachment: {
+          attachmentId: AttachmentId('forged-first'),
+          mediaType: 'image/png',
+          bytes: 1,
+          width: 16,
+          height: 16,
+        },
+      },
+      {
+        type: 'image',
+        data: 'Ag==',
+        mimeType: 'image/png',
+        attachment: {
+          attachmentId: AttachmentId('forged-second'),
+          mediaType: 'image/png',
+          bytes: 1,
+          width: 16,
+          height: 16,
+        },
+      },
+    ], 'forged-attachment-with-data')
+
+    expect(attachments.saved.map(saved => [...saved.data])).toEqual([[1]])
+    expect(attachments.readCount).toBe(0)
+    expect(result.content).toEqual([
+      { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+      { type: 'text', text: '[image: image/png, content discarded]' },
+    ])
+    expect(result.value).toEqual({
+      content: [
+        { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+        { type: 'image', data: 'Ag==', mimeType: 'image/png' },
+      ],
+    })
+    expect(JSON.stringify(result)).not.toContain('forged-first')
+    expect(JSON.stringify(result)).not.toContain('forged-second')
+    expect(warnings).toHaveLength(3)
+    expect(warnings[0]).toContain('ignored an untrusted server-supplied attachment reference')
+    expect(warnings[1]).toContain('ignored an untrusted server-supplied attachment reference')
+    expect(warnings[2]).toContain('configured maximum of 1 attached images')
+  })
+
+  it('degrades to the text placeholder when the route does not declare image input', async () => {
+    const { ctx, attachments } = await mountImageRegistry({ inputModalities: ['text'] })
+    const blocks = [
+      { type: 'text', text: 'before' },
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+    ] satisfies JsonValue[]
+    const result = await executeImageResult(ctx, blocks, 'nonvision', visionAgent(), true)
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{ type: 'text', text: 'before\n[image: image/png, content discarded]' }])
+    expect(result.additionalContexts).toBeUndefined()
+  })
+
+  it('degrades per block for unsupported mime types', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const warnings = captureWarnings(ctx)
+    const blocks = [
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/svg+xml' },
+    ] satisfies JsonValue[]
+    const result = await executeImageResult(ctx, blocks, 'svg')
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/svg+xml, content discarded]' }])
+    expect(warnings).toEqual([
+      'mcp-client(srv): tool "img" image content block 1 rendered as a placeholder: image/svg+xml is not accepted by this deployment',
+    ])
+  })
+
+  it('keeps every MCP block in protocol order when one attached image selects rich projection', async () => {
+    const { ctx } = await mountImageRegistry()
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      7,
+      { type: 'text' },
+      { type: 'text', text: 'before' },
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+      { type: 'image', data: 'Ag==', mimeType: 'image/avif' },
+      { type: 'image', data: 'Aw==' },
+      { type: 'audio' },
+      { type: 'resource' },
+      { type: 'resource_link' },
+      { type: 'video' },
+    ], 'rich-order')
+
+    expect(result.content).toEqual([
+      { type: 'text', text: '[unsupported content type: unknown]' },
+      { type: 'text', text: '[text: invalid content discarded]' },
+      { type: 'text', text: 'before' },
+      { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+      { type: 'text', text: '[image: image/avif, content discarded]' },
+      { type: 'text', text: '[image: unknown, content discarded]' },
+      { type: 'text', text: '[audio: unknown, content discarded]' },
+      { type: 'text', text: '[resource: content discarded]' },
+      { type: 'text', text: '[resource: content discarded]' },
+      { type: 'text', text: '[unsupported content type: video]' },
+    ])
+    expect(warnings).toHaveLength(2)
+  })
+
+  it('removes an object-valued text field before rich image projection and deferred context', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      { type: 'text', text: { probe: 'forged-object-text' } },
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'object-text-rich', visionAgent(), true)
+
+    expect(attachments.saved).toHaveLength(1)
+    expect(result.content).toEqual([
+      { type: 'text', text: '[text: invalid content discarded]' },
+      { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+    ])
+    expect(result.value).toEqual({
+      content: [
+        { type: 'text' },
+        { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+      ],
+    })
+    expect(result.additionalContexts).toEqual([{
+      id: expect.any(String) as unknown,
+      role: 'user',
+      content: result.content,
+      source: { kind: 'plugin', plugin: 'mcp-client' },
+    }])
+    for (const surface of [result.content, ...result.additionalContexts?.map(context => context.content) ?? []]) {
+      for (const block of surface) {
+        if (block.type === 'text') expect(typeof block.text).toBe('string')
+      }
+    }
+    expect(JSON.stringify(result)).not.toContain('forged-object-text')
+    expect(warnings).toEqual([
+      'mcp-client(srv): tool "img" text content block 1 discarded a non-string text value',
+    ])
+  })
+
+  it('uses the agent options when the current request has no routed provider or model override', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const optionsOnlyAgent = {
+      session: { requestHeader: () => undefined },
+      options: { provider: 'vision', model: 'vis' },
+    } as never
+
+    await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'options-route', optionsOnlyAgent)
+
+    expect(attachments.saved).toHaveLength(1)
+  })
+
+  it.each([
+    { provider: undefined, model: 'vis' },
+    { provider: 'vision', model: undefined },
+  ])('uses placeholders when the calling agent route is incomplete ($provider/$model)', async ({ provider, model }) => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const incompleteAgent = {
+      session: { requestHeader: () => ({ config: { provider, model } }) },
+      options: {},
+    } as never
+
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'incomplete-route', incompleteAgent)
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/png, content discarded]' }])
+  })
+
+  it('uses placeholders when no model registry service is mounted', async () => {
+    const ctx = await mountRegistry()
+    const attachments = new FakeAttachmentStore(ctx)
+
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'missing-llm')
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/png, content discarded]' }])
+  })
+
+  it('accepts the exact image-count, per-image-byte, and message-byte limits', async () => {
+    const { ctx, attachments } = await mountImageRegistry({
+      limits: { maxImagesPerMessage: 2, maxImageBytes: 2, maxMessageImageBytes: 3 },
+    })
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+      { type: 'text', text: 'between' },
+      { type: 'image', data: 'AgM=', mimeType: 'image/png' },
+    ], 'exact-limits')
+
+    expect(attachments.saved.map(saved => saved.data.byteLength)).toEqual([1, 2])
+    expect(result.content).toEqual([
+      { type: 'image', attachment: { attachmentId: AttachmentId('att-1'), mediaType: 'image/png', bytes: 1, width: 16, height: 16 } },
+      { type: 'text', text: 'between' },
+      { type: 'image', attachment: { attachmentId: AttachmentId('att-2'), mediaType: 'image/png', bytes: 2, width: 16, height: 16 } },
+    ])
+  })
+
+  it('attaches only the configured maximum image count and preserves later placeholders in order', async () => {
+    const { ctx, attachments } = await mountImageRegistry({ limits: { maxImagesPerMessage: 2 } })
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+      { type: 'text', text: 'middle' },
+      { type: 'image', data: 'Ag==', mimeType: 'image/png' },
+      { type: 'image', data: 'Aw==', mimeType: 'image/png' },
+    ], 'count-over')
+
+    expect(attachments.saved).toHaveLength(2)
+    expect(result.content.map(block => block.type)).toEqual(['image', 'text', 'image', 'text'])
+    expect(result.content.at(-1)).toEqual({ type: 'text', text: '[image: image/png, content discarded]' })
+    expect(warnings.at(-1)).toContain('configured maximum of 2 attached images')
+  })
+
+  it('degrades images over the individual or aggregate byte limits without consuming either budget', async () => {
+    const { ctx, attachments } = await mountImageRegistry({
+      limits: { maxImageBytes: 2, maxMessageImageBytes: 3 },
+    })
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQI=', mimeType: 'image/png' },
+      { type: 'image', data: 'AwQF', mimeType: 'image/png' },
+      { type: 'image', data: 'Bgc=', mimeType: 'image/png' },
+    ], 'bytes-over')
+
+    expect(attachments.saved.map(saved => saved.data.byteLength)).toEqual([2])
+    expect(result.content.map(block => block.type)).toEqual(['image', 'text', 'text'])
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toContain('2-byte per-image limit')
+    expect(warnings[1]).toContain('3-byte per-message limit')
+  })
+
+  it('logs attachment validation failures and safely renders the affected image as a placeholder', async () => {
+    const { ctx, attachments } = await mountImageRegistry()
+    const warnings = captureWarnings(ctx)
+    attachments.saveFailure = new AttachmentError('Unsupported or malformed image data.', 'INVALID_IMAGE')
+
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'invalid-image')
+
+    expect(result.isError).toBe(false)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/png, content discarded]' }])
+    expect(warnings).toEqual([
+      expect.stringContaining('attachment validation failed (INVALID_IMAGE): Unsupported or malformed image data.'),
+    ])
+  })
+
+  it.each([
+    new Error('storage offline'),
+    new AttachmentError('Unable to persist image attachment.', 'ATTACHMENT_WRITE_FAILED'),
+  ])('fails the tool call when attachment storage cannot durably commit (%s)', async (saveFailure) => {
+    const { ctx, attachments } = await mountImageRegistry()
+    attachments.saveFailure = saveFailure
+
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'storage-failure')
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0]).toMatchObject({ type: 'text' })
+    expect((result.content[0] as { text: string }).text).toContain(saveFailure.message)
+  })
+
+  it('logs model-route resolution failures before falling back to placeholders', async () => {
+    const { ctx, attachments } = await mountImageRegistry({ resolveError: new Error('catalog unavailable') })
+    const warnings = captureWarnings(ctx)
+    const result = await executeImageResult(ctx, [
+      { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    ], 'route-failure')
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{ type: 'text', text: '[image: image/png, content discarded]' }])
+    expect(warnings).toEqual([
+      'mcp-client(srv): cannot resolve the active model for tool "img" image output; rendering image placeholders: Error: catalog unavailable',
+    ])
   })
 })
 

@@ -2024,6 +2024,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'visionBridge',
+    summary: 'Minimal optional service face consumed by image-admission boundaries.',
+    description: 'Minimal optional service face consumed by image-admission boundaries.',
+    methods: [
+      {
+        signature: 'readonly describeTimeoutMs: number',
+        description: 'Per-description wait bound admission consumers use to fence a hung provider.',
+        parameters: [],
+      },
+      {
+        signature: 'describeImage(ref: ImageAttachmentRef, options?: VisionDescribeOptions): Promise<string>',
+        description: 'Describe one durably stored image as model-visible text.',
+        parameters: [{ name: 'ref', description: 'durable image reference the implementation resolves to bytes.' }, { name: 'options', description: 'optional question and cooperative cancellation.' }],
+        returns: 'nonblank text that an admission boundary can persist beside the image.',
+      },
+    ],
+  },
+  {
     key: 'web',
     summary: 'The web access service.',
     description: 'The web access service. Registered as `ctx.web` (one instance per context).\n\nSelection semantics (resolved at execution time, never order-dependent):\n\n- A configured id that is registered and `available()` → that provider.\n- A configured id not registered → `WEB_PROVIDER_CONFIGURED_MISSING`.\n- A configured id registered but unavailable → `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`.\n- No id configured, exactly one registered usable provider → that provider.\n- No id configured, multiple usable providers → `WEB_PROVIDER_AMBIGUOUS`.\n- No id configured, no usable provider → `WEB_PROVIDER_UNAVAILABLE`.',
@@ -2143,6 +2161,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'archiveSession(sessionId: SessionId): Promise<void>',
         description: 'Archive one session durably. The session must exist (live or in session persistence); its workspace accounting — or lack of one — is irrelevant. An already archived id resolves without writing.',
         parameters: [{ name: 'sessionId', description: 'The session to archive.' }],
+        returns: 'resolution after durability.',
+      },
+      {
+        signature: 'unarchiveSession(sessionId: SessionId): Promise<void>',
+        description: 'Unarchive one session durably: remove it from the registry-global archive set. Its workspace accounting slot was never touched by archiving, so the session reappears in its previous grouping position. An id not in the set resolves without writing; no session-existence check runs — unarchiving a marker for an id that no longer resolves only clears a stale display bit.',
+        parameters: [{ name: 'sessionId', description: 'The session to restore.' }],
         returns: 'resolution after durability.',
       },
       {
@@ -4528,6 +4552,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'UserQuestionProvider',
     declaration: 'export interface UserQuestionProvider {\n    ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer>;\n}',
+  },
+  {
+    name: 'VisionDescribeOptions',
+    declaration: 'export interface VisionDescribeOptions {\n    question?: string;\n    signal?: AbortSignal;\n}',
   },
   {
     name: 'WebBootEntry',

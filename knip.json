@@ -33,6 +33,23 @@
         "scripts/**/*.cjs"
       ]
     },
+    "apps/desktop": {
+      "entry": [
+        "scripts/*.cjs",
+        "tests/**/*.spec.ts"
+      ],
+      "project": [
+        "*.cjs",
+        "scripts/*.cjs",
+        "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@deepseek-ai/.+",
+        "@opentelemetry/api",
+        "clsx",
+        "hono"
+      ]
+    },
     "examples": {
       "entry": [
         "headless-agent/tests/fixtures/cli-mock-llm.ts",

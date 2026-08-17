@@ -1,0 +1,50 @@
+{
+  "durableUserContent": [
+    {
+      "type": "image",
+      "attachment": {
+        "attachmentId": "sha256:b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640",
+        "mediaType": "image/png",
+        "width": 1,
+        "height": 1,
+        "bytes": 69,
+        "name": "red.png"
+      }
+    },
+    {
+      "type": "text",
+      "text": "[image-description]\nA one-pixel red PNG fixture.",
+      "imageDescriptionOf": "sha256:b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640"
+    }
+  ],
+  "visionRequest": {
+    "provider": "snapshot-vision",
+    "model": "snapshot-vision-model",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Describe the image for the text-only main model."
+          },
+          {
+            "type": "image",
+            "attachment": {
+              "attachmentId": "sha256:b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640",
+              "mediaType": "image/png",
+              "width": 1,
+              "height": 1,
+              "bytes": 69,
+              "name": "red.png"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "deepSeekRequest": {
+    "model": "deepseek-v4-flash",
+    "projectedUserContent": "[image omitted: DeepSeek cannot inspect this image][image-description]\nA one-pixel red PNG fixture."
+  }
+}

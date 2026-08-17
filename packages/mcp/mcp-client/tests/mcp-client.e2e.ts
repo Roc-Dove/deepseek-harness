@@ -19,6 +19,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import AttachmentStore, { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type {
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  SaveImageAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { CallId } from '@deepseek-ai/dsh-llm'
@@ -62,6 +69,39 @@ function nextCallId(): CallId {
   return CallId(`e2e-${++callSeq}`)
 }
 
+/** Deterministic durable-seam fake; the MCP server and transport remain real. */
+class FixtureAttachmentStore extends AttachmentStore {
+  readonly imageLimits: ImageAttachmentLimits = {
+    maxImageBytes: 1_000,
+    maxImagesPerMessage: 4,
+    maxMessageImageBytes: 4_000,
+    maxImagePixels: 1_000,
+    mediaTypes: ['image/png'],
+  }
+  readonly saved: SaveImageAttachment[] = []
+  async validateImage(): Promise<void> {}
+  async saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+    this.saved.push(input)
+    return {
+      attachmentId: AttachmentId(`fixture-${this.saved.length}`),
+      mediaType: input.mediaType,
+      bytes: input.data.byteLength,
+      width: 1,
+      height: 1,
+    }
+  }
+  async readImage(): Promise<StoredImageAttachment> {
+    throw new Error('unused in this suite')
+  }
+}
+
+function fixtureAgent(model: 'vision' | 'text'): never {
+  return {
+    session: { requestHeader: () => ({ config: { provider: 'fixture-provider', model } }) },
+    options: { provider: 'fixture-provider', model },
+  } as never
+}
+
 // ---- Fixture server tests ----
 
 describe('fixture server — controlled scenarios', () => {
@@ -95,6 +135,7 @@ describe('fixture server — controlled scenarios', () => {
     expect(names).toContain('mcp__fixture__greet')
     expect(names).toContain('mcp__fixture__fail')
     expect(names).toContain('mcp__fixture__image')
+    expect(names).toContain('mcp__fixture__images')
     // Raw names are not registered.
     expect(names).not.toContain('add')
   })
@@ -151,6 +192,91 @@ describe('fixture server — controlled scenarios', () => {
     expect(text).toContain('Here is an image:')
     expect(text).toContain('[image: image/png, content discarded]')
     expect(text).toContain('End of image.')
+  })
+})
+
+describe('fixture server — image attachment composition', () => {
+  let ctx: Context
+  let attachments: FixtureAttachmentStore
+
+  beforeAll(async () => {
+    ctx = await mountRegistry()
+    attachments = new FixtureAttachmentStore(ctx)
+    ctx.provide('llm', {
+      resolveModelInfo: async (_provider: string, model: string) => ({
+        inputModalities: model === 'vision' ? ['text', 'image'] : ['text'],
+      }),
+    } as never)
+    await apply(ctx, {
+      transport: 'stdio',
+      serverName: 'fixture_images',
+      command: process.execPath,
+      args: [fixtureServerPath],
+      env: {},
+      cwd: packageDir,
+      toolCallTimeoutMs: 15_000,
+      failOnStartupError: false,
+    })
+  }, 30_000)
+
+  afterAll(async () => {
+    if (ctx) await ctx.fiber.dispose()
+    await sleep(200)
+  })
+
+  it('projects a real MCP multi-image result and its deferred model message in protocol order', async () => {
+    attachments.saved.length = 0
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: nextCallId(),
+      name: 'mcp__fixture_images__images',
+      arguments: {},
+      agent: fixtureAgent('vision'),
+      parent: Symbol('fixture-parent') as never,
+    })
+
+    expect(attachments.saved.map(saved => [...saved.data])).toEqual([[1], [2, 3]])
+    expect(result.content).toEqual([
+      { type: 'text', text: 'before' },
+      { type: 'image', attachment: { attachmentId: AttachmentId('fixture-1'), mediaType: 'image/png', bytes: 1, width: 1, height: 1 } },
+      { type: 'text', text: 'between' },
+      { type: 'image', attachment: { attachmentId: AttachmentId('fixture-2'), mediaType: 'image/png', bytes: 2, width: 1, height: 1 } },
+      { type: 'text', text: 'after' },
+    ])
+    expect(result.value).toEqual({ content: result.content })
+    expect(result.additionalContexts).toEqual([{
+      id: expect.any(String) as unknown,
+      role: 'user',
+      content: result.content,
+      source: { kind: 'plugin', plugin: 'mcp-client' },
+    }])
+  })
+
+  it('keeps the same real MCP result in one ordered placeholder message for a text route', async () => {
+    attachments.saved.length = 0
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: nextCallId(),
+      name: 'mcp__fixture_images__images',
+      arguments: {},
+      agent: fixtureAgent('text'),
+    })
+
+    expect(attachments.saved).toHaveLength(0)
+    expect(result.content).toEqual([{
+      type: 'text',
+      text: 'before\n[image: image/png, content discarded]\nbetween\n[image: image/png, content discarded]\nafter',
+    }])
+    expect(result.value).toEqual({
+      content: [
+        { type: 'text', text: 'before' },
+        { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+        { type: 'text', text: 'between' },
+        { type: 'image', data: 'AgM=', mimeType: 'image/png' },
+        { type: 'text', text: 'after' },
+      ],
+    })
+    expect(result.additionalContexts).toBeUndefined()
   })
 })
 

@@ -142,8 +142,8 @@ MCP 仅保证工具名在[单个服务器内](https://modelcontextprotocol.io/sp
 
 1. 解析 `rawName`（执行器闭包持有它），以配置的超时时间调用 `client.callTool({ name: rawName, arguments }, { signal: exec.signal })`——公开名称永远不发送给服务器。
 2. 映射结果：
-   - 多个 `text` 内容块 → 以 `'\n'` 连接为单个 `TextBlock`（之所以必须这样做，是因为 `flattenText` 使用无分隔符的 `join('')`，多个内容块会丢失块间边界）。
-   - `image` 内容块 → 丢弃并 `ctx.logger.warn`（harness 没有图片内容块类型；[删除图片 Agent Note](../simplification/2026-07-04-drop-image-content-block.md)）。
+   - 纯文本投影会以 `'\n'` 将多个 `text` 内容块连接为一个 `TextBlock`；富媒体投影则在通过准入的图片旁保留其协议顺序。
+   - `image` 内容块遵循 [MCP 图片结果投影决策](2026-08-16-mcp-image-result-attachment-projection.md)中的可选持久化附件、路由模态、限制、占位符和存储 fail-closed 规则。
    - `isError: true` → 映射到 harness 的 `isError` 结果路径（`{ content: [...], isError: true }`）。
 3. 取消：`exec.signal`（来自 agent loop（智能体循环）的取消）透传给 MCP SDK 的 `callTool`，后者向服务器发送 `$/cancelRequest`。
 
@@ -194,8 +194,8 @@ v1 否决。它能防止跨服务器冲突，但无法将 MCP 注册与原生 ha
 覆盖范围按层级列出；每项行为都放在能够表达它的最低成本层级。
 
 - **单元测试**（`tests/mcp-client.spec.ts`、`tests/apply.spec.ts`，mock MCP SDK）：`publicToolName` 算法（干净名称、规范化、截断加 hash、确定性、不同标识的分离）、raw 与 public 的协议纪律、跨服务器与原生工具共存、重复 `serverName` 加载失败与预留释放、无效工具列表拒绝、注册代切换/回滚、重新同步失败时保留上一代注册、结果映射、取消、配置 schema 校验。100% 逐文件覆盖率门禁约束该包。
-- **E2E**（`tests/mcp-client.e2e.ts`，无需密钥）：使用真实 MCP 协议对接仓库内的 fixture（测试前置数据）服务器、`@modelcontextprotocol/server-everything` 和 `@modelcontextprotocol/server-filesystem`（stdio 传输），以及进程内 `StreamableHTTPServerTransport` 服务器（Streamable HTTP 传输）——命名空间下的发现、带点号名称的端到端规范化、执行往返、重复 `serverName` 拒绝、dispose。
-- **快照**：刻意不做。MCP 工具不引入新的展示形态——它们以原始 `ToolDefinition` 注册，UI 消费方使用各自展示测试套件已固定的通用卡片兜底。将 MCP 服务器添加到某个可运行的快照组合会改变其已固定的系统提示词 fixture，且使每次回放依赖于 spawn 外部 MCP 服务器进程，而新增行为为零。如果后续变更为 MCP 工具引入专属渲染意图，该变更届时自行声明快照覆盖。
+- **E2E**（`tests/mcp-client.e2e.ts`，无需密钥）：使用真实 MCP 协议对接仓库内的 fixture（测试前置数据）服务器、`@modelcontextprotocol/server-everything` 和 `@modelcontextprotocol/server-filesystem`（stdio 传输），以及进程内 `StreamableHTTPServerTransport` 服务器（Streamable HTTP 传输）——命名空间下的发现、带点号名称的端到端规范化、执行往返、有序多图片结果投影、重复 `serverName` 拒绝、dispose。
+- **快照**：基础命名与通用卡片决策不增加专属展示快照。后续的[图片结果投影](2026-08-16-mcp-image-result-attachment-projection.md)新增无需密钥的组装 ACP transcript，把 MCP 图片附件带入后续模型请求。
 
 ## 后果
 

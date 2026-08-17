@@ -4,7 +4,7 @@
  * @module dsh-llm-pi-ai/context
  */
 
-import { CallId, contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { CallId, contentHasImage, LlmError, projectDescribedImagesToText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
@@ -87,10 +87,10 @@ function piContext(options: GenerateOptions, messages: PiMessage[]): PiContext {
 function textOnlyContext(options: GenerateOptions): PiContext {
   const toolNames = new Map<CallId, string>()
   const messages: PiMessage[] = []
-  for (const message of options.messages) {
-    if (contentHasImage(message.content)) {
-      throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
-    }
+  // This projector fails before conversion when any image lacks the controlled
+  // adjacent description written by the vision bridge. The resulting pi-ai
+  // context therefore contains description text but no image content.
+  for (const message of projectDescribedImagesToText(options.messages)) {
     if (message.role === 'system') {
       messages.push({ role: 'user', content: flattenText(message), timestamp: 0 })
       continue

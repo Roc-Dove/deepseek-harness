@@ -51,6 +51,20 @@ server.registerTool('image', {
   ],
 }))
 
+server.registerTool('images', {
+  title: 'Multiple Images Tool',
+  description: 'Returns interleaved text and image content blocks.',
+  inputSchema: {},
+}, async () => ({
+  content: [
+    { type: 'text', text: 'before' },
+    { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+    { type: 'text', text: 'between' },
+    { type: 'image', data: 'AgM=', mimeType: 'image/png' },
+    { type: 'text', text: 'after' },
+  ],
+}))
+
 server.registerTool('crash', {
   title: 'Crash Tool',
   description: 'Replies, then exits the server process (crash-recovery test).',

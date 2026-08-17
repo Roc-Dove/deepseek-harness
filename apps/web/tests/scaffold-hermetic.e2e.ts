@@ -5,7 +5,14 @@ import { expect, it } from 'vitest'
 import type {} from '@deepseek-ai/dsh-skill'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-agent-presets'
-import { launchWebScaffold, type WebScaffold } from './scaffold.ts'
+import { launchWebScaffold, normalizeAria, type WebScaffold } from './scaffold.ts'
+
+it('normalizes English session dates across calendar days and separators', () => {
+  const first = normalizeAria('Updated 2026-8-16 09:04', '/tmp/workspace')
+  const later = normalizeAria('Updated 2027/1/2 23:59', '/tmp/workspace')
+  expect(first).toBe('Updated {{date}} {{clock}}')
+  expect(later).toBe(first)
+})
 
 async function writeSkill(root: string, name: string): Promise<void> {
   const bundle = join(root, name)

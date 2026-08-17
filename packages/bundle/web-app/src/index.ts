@@ -65,6 +65,8 @@ export interface WebRuntimeValues {
 
 /** Environment variable naming the canonical local URL of this Web GUI. */
 const DSH_WEB_URL = 'DSH_WEB_URL' as const
+/** Desktop launcher marker: installed resources are immutable, not a source checkout. */
+const PACKAGED_DESKTOP_DEPLOYMENT = 'packaged'
 
 // Display-only mirror of the webserver schema's loopback host: the address the
 // local URL always prints. Not a source of truth — the schema is.
@@ -92,7 +94,16 @@ export function resolveLanTrust(bindHost: string, extra: readonly string[]): Web
 }
 
 /** Model-visible orientation and acceptance boundary for sessions created through `dsh web`. */
-function webSurfacePrompt(webUrl: string): string {
+function webSurfacePrompt(webUrl: string, packagedDesktop: boolean): string {
+  if (packagedDesktop) {
+    return `You are interacting with the user through the installed DeepSeek Harness desktop application at ${webUrl}. `
+      + 'When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this desktop GUI. '
+      + 'The browser provides no implicit DOM, route, or screenshot context. '
+      + 'The application resources and bundled backend are immutable installation files, not a source checkout. '
+      + 'Do not advise editing those resources, running pnpm there, or rebuilding them in place; use a separate source checkout for Harness development. '
+      + 'User workspaces and files selected through the application remain writable. '
+      + 'Starting another server does not update this GUI, so do not start a replacement server unless the user asks.'
+  }
   const updateContract = 'The client-plugin HMR receiver is active, but client-plugin changes reload without a refresh only while '
     + '`pnpm run dev:web` is also running from this same checkout to rebuild their bundles; verify that watcher before promising automatic updates. '
     + 'Every other change — the apps/web shell and plain packages — requires rebuilding the affected Web artifacts and verifying this existing URL after a page refresh. '
@@ -134,16 +145,17 @@ export const internals: { resolveDistIndex: () => string } = { resolveDistIndex 
  */
 export function apply(ctx: Context, config: Config): void {
   const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const packagedDesktop = process.env.DSH_DESKTOP_DEPLOYMENT === PACKAGED_DESKTOP_DEPLOYMENT
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
   if (config.surfaceContext) {
     ctx.inject(['systemPrompt'], (promptCtx) => {
-      addHarnessSourceSection(promptCtx, SOURCE_ROOT)
+      if (!packagedDesktop) addHarnessSourceSection(promptCtx, SOURCE_ROOT)
       promptCtx.systemPrompt.section({
         name: 'app:web-surface',
         order: -98,
-        text: () => webSurfacePrompt(localWebUrl(promptCtx)),
+        text: () => webSurfacePrompt(localWebUrl(promptCtx), packagedDesktop),
       })
     })
     ctx.inject(['shellEnv'], (runtimeCtx) => {
@@ -165,7 +177,16 @@ export function apply(ctx: Context, config: Config): void {
       // Reuse the exact LAN snapshot provided to the /api trust fence.
       const lanCandidate = runtime.lanAddresses[0]
       const port = ctx.webServer.port
-      console.log(`dsh web: ${localWebUrl(ctx)}${lanCandidate === undefined ? '' : ` (LAN: http://${lanCandidate}:${String(port)})`}`)
+      const webUrl = localWebUrl(ctx)
+      console.log(`dsh web: ${webUrl}${lanCandidate === undefined ? '' : ` (LAN: http://${lanCandidate}:${String(port)})`}`)
+      if (packagedDesktop && process.connected && process.send !== undefined) {
+        try {
+          process.send({ type: 'dsh:desktop-ready', url: webUrl })
+        } catch {
+          // The desktop parent can exit between the connected check and send;
+          // stdout remains the compatibility readiness signal.
+        }
+      }
     }
     // This row's own activation can precede a sibling failure. The app owns
     // readiness by waiting for its Loader tree, or prints at once in a

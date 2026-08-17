@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { CallId, createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { CallId, createMessage, createUserMessage, imageDescriptionBlock } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import { toPiContext } from '../src/context.ts'
 import { toPiAssistant } from '../src/replay.ts'
@@ -77,7 +77,24 @@ describe('pi-ai request context conversion', () => {
       type: 'tool-result',
       toolCallId: callId,
       content: [{ type: 'image', attachment: ref }],
-    }])]))).toThrow(/durable attachment service/)
+    }])]))).toThrow(/durable bridge description/)
+  })
+
+  it('projects a covered durable image to description text without attachment I/O', () => {
+    const readImage = vi.spyOn(attachments, 'readImage')
+    readImage.mockClear()
+    const context = toPiContext(request([user([
+      { type: 'image', attachment: ref },
+      imageDescriptionBlock(ref, 'a covered image'),
+      { type: 'text', text: 'continue' },
+    ])]))
+
+    expect(context.messages).toEqual([{
+      role: 'user',
+      content: '[image-description]\na covered imagecontinue',
+      timestamp: 0,
+    }])
+    expect(readImage).not.toHaveBeenCalled()
   })
 
   it('resolves user and tool-result images while preserving explicit fallbacks', async () => {

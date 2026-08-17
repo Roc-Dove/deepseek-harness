@@ -841,7 +841,27 @@ async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<Prepared
 stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:284`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:233`](../../packages/llm/llm/src/index.ts)
+
+<a id="ctxvisionbridge--visionbridgeservice"></a>
+
+### `ctx.visionBridge` — `VisionBridgeService`
+
+Minimal optional service face consumed by image-admission boundaries.
+
+```ts cordis-catalog
+/**
+ * Describe one durably stored image as model-visible text.
+ * @param ref - durable image reference the implementation resolves to bytes.
+ * @param options - optional question and cooperative cancellation.
+ * @returns nonblank text that an admission boundary can persist beside the image.
+ */
+describeImage(ref: ImageAttachmentRef, options?: VisionDescribeOptions): Promise<string>
+```
+
+Types: [ImageAttachmentRef](attachment.md)
+
+Source: [`packages/llm/llm/src/image-description.ts:27`](../../packages/llm/llm/src/image-description.ts)
 
 <a id="llm-events"></a>
 
@@ -890,5 +910,5 @@ Waterfall around every streaming model call (retry, replay, routing). Bound to t
 'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:64`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:63`](../../packages/llm/llm/src/index.ts)
 <!-- END GENERATED cordis-surface -->

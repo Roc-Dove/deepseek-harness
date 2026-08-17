@@ -941,4 +941,43 @@ describe('registry-global session archive', () => {
     const upgraded = await harness({ pool: legacy })
     expect(upgraded.registry.archivedSessionIds).toEqual([])
   })
+
+  it('unarchives durably, idempotently skips non-members, and leaves accounting untouched', async () => {
+    const dir = await makeDir('unarchive-home')
+    const result = await harness({
+      sessions: [header('kept', dir, 100), header('back', dir, 200)],
+    })
+    const workspace = result.registry.list()[0]!
+    await result.registry.archiveSession(SessionId('kept'))
+    await result.registry.archiveSession(SessionId('back'))
+
+    await result.registry.unarchiveSession(SessionId('back'))
+    expect(result.registry.archivedSessionIds).toEqual(['kept'])
+    // Unarchiving is a display-set write: the workspace account keeps the id.
+    expect(workspace.sessionIds).toContain('back')
+    expect(storedState(result.pool).archivedSessionIds).toEqual(['kept'])
+    const changesAfterFirst = result.changes.filter(change => change.table === '').length
+
+    // The idempotent repeat neither rewrites the medium nor emits a change.
+    await result.registry.unarchiveSession(SessionId('back'))
+    expect(result.registry.archivedSessionIds).toEqual(['kept'])
+    expect(result.changes.filter(change => change.table === '').length).toBe(changesAfterFirst)
+
+    await result.registry.unarchiveSession(SessionId('kept'))
+    expect(result.registry.archivedSessionIds).toEqual([])
+  })
+
+  it('unarchiving a marker for an id with no session still clears it', async () => {
+    // Seed the durable display marker directly with no live or persisted
+    // Session. Unarchive must not require the missing Session to clear it.
+    const pool = storedPool([], {
+      initialized: true,
+      workspaceIds: [],
+      archivedSessionIds: [SessionId('ghost')],
+    })
+    const result = await harness({ pool, sessions: [] })
+    expect(result.registry.archivedSessionIds).toEqual(['ghost'])
+    await expect(result.registry.unarchiveSession(SessionId('ghost'))).resolves.toBeUndefined()
+    expect(storedState(result.pool).archivedSessionIds).toEqual([])
+  })
 })

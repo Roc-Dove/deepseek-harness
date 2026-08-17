@@ -1,0 +1,28 @@
+- dialog "Settings":
+  - navigation:
+    - text: Settings
+    - button "General":
+      - img
+      - text: General
+    - button "Models":
+      - img
+      - text: Models
+    - button "Plugins":
+      - img
+      - text: Plugins
+    - button "Archived sessions":
+      - img
+      - text: Archived sessions
+    - button "Agent presets":
+      - img
+      - text: Agent presets
+  - button "Open configuration file"
+  - button "Close":
+    - img
+    - text: Close
+  - heading "Archived sessions" [level=2]
+  - paragraph: Archived sessions are hidden from the session list. Review and restore them here.
+  - list:
+    - listitem:
+      - button "Open session “Use the read tool twice”": Use the read tool twice Updated {{date}} {{clock}}
+      - button "Unarchive"
