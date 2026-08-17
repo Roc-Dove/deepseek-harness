@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">DeepSeek Harness Desktop 运行结构</title>
+  <desc id="desc">Electron 窗口连接本机回环后端，后端在本机保存应用数据，并连接用户配置的模型路由与 MCP 服务器。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#020617" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#93c5fd"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="420" rx="32" fill="url(#background)"/>
+  <circle cx="1055" cy="66" r="160" fill="#2563eb" opacity="0.10"/>
+  <circle cx="118" cy="372" r="170" fill="#4f46e5" opacity="0.10"/>
+
+  <path d="M 352 165 H 430" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M 770 165 H 848" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M 600 232 V 288" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="92" width="280" height="146" rx="22" fill="#f8fafc"/>
+    <rect x="460" y="72" width="310" height="166" rx="22" fill="#f8fafc"/>
+    <rect x="850" y="92" width="280" height="146" rx="22" fill="#f8fafc"/>
+    <rect x="410" y="300" width="380" height="82" rx="20" fill="#e0e7ff"/>
+  </g>
+
+  <rect x="94" y="116" width="44" height="44" rx="12" fill="url(#accent)"/>
+  <path d="M 105 128 H 127 M 105 138 H 127 M 105 148 H 119" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <text x="158" y="137" fill="#0f172a" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="25" font-weight="700">桌面窗口</text>
+  <text x="94" y="184" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">对话、工具、会话与图片</text>
+  <text x="94" y="210" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">集中在一个窗口中</text>
+
+  <rect x="486" y="98" width="44" height="44" rx="12" fill="url(#accent)"/>
+  <path d="M 497 112 H 519 V 130 H 497 Z M 503 106 V 112 M 513 106 V 112" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="550" y="120" fill="#0f172a" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="25" font-weight="700">内置后端</text>
+  <text x="486" y="172" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">通过本机 127.0.0.1 回环连接</text>
+  <text x="486" y="200" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">随桌面安装包一起运行</text>
+
+  <rect x="874" y="116" width="44" height="44" rx="12" fill="url(#accent)"/>
+  <circle cx="888" cy="130" r="4" fill="white"/>
+  <circle cx="904" cy="146" r="4" fill="white"/>
+  <circle cx="904" cy="122" r="4" fill="white"/>
+  <path d="M 891 128 L 901 123 M 891 133 L 901 143" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <text x="938" y="137" fill="#0f172a" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="25" font-weight="700">你的连接</text>
+  <text x="874" y="184" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">已配置的模型路由</text>
+  <text x="874" y="210" fill="#475569" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">与 MCP 服务器</text>
+
+  <text x="600" y="334" text-anchor="middle" fill="#312e81" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="21" font-weight="700">应用专属数据</text>
+  <text x="600" y="362" text-anchor="middle" fill="#4f46e5" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17">设置 · 会话 · 工作区 · 附件</text>
+</svg>
