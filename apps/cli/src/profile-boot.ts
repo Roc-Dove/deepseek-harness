@@ -39,6 +39,23 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
 
 const NAME = 'dsh'
+const PACKAGED_DESKTOP_DEPLOYMENT = 'packaged'
+
+/**
+ * Recognize the single control message an installed desktop parent may send.
+ * @param message - Untrusted child-process IPC payload.
+ * @returns Whether the payload requests orderly application shutdown.
+ */
+export function isDesktopShutdownMessage(message: unknown): boolean {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return false
+  const candidate = message as { type?: unknown }
+  return candidate.type === 'dsh:desktop-shutdown' && Object.keys(candidate).length === 1
+}
+
+/** Packaged desktop resources are immutable and therefore do not mount source-oriented HMR watchers. */
+export function usesLiveUserPatches(environment: NodeJS.ProcessEnv): boolean {
+  return environment.DSH_DESKTOP_DEPLOYMENT !== PACKAGED_DESKTOP_DEPLOYMENT
+}
 
 /**
  * The home-level user patch layer (`$DSH_HOME/cordis.patch.yml`), applied
@@ -213,6 +230,15 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
     signalShutdown.abort()
     shutdown.interrupt(code)
   }
+  const desktopMessage = (message: unknown): void => {
+    if (!isDesktopShutdownMessage(message)) return
+    process.off('message', desktopMessage)
+    if (process.connected) process.disconnect()
+    interrupt(0)
+  }
+  if (process.env.DSH_DESKTOP_DEPLOYMENT === PACKAGED_DESKTOP_DEPLOYMENT && process.connected) {
+    process.on('message', desktopMessage)
+  }
   // Signals own teardown throughout the startup window, not only after boot()
   // settles: an inserted provider can publish before sibling rows finish mounting.
   // SIGTERM is a supervisor's ordinary stop request and exits 0 on every
@@ -265,7 +291,8 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   // landed mid-setup. Watching is unconditional: a one-shot surface exits
   // through its bounded shutdown, which disposes the watchers before the
   // loop drains.
-  if (!signalShutdown.signal.aborted
+  if (usesLiveUserPatches(process.env)
+    && !signalShutdown.signal.aborted
     && ctx.fiber.state === FiberState.ACTIVE
     && ctx.get('loader') !== undefined) {
     try {

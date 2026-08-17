@@ -3,9 +3,10 @@ const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const {
+  backendLaunch,
   classifyNavigation,
   createProcessTreeStopper,
-  harnessArguments,
+  desktopReadyUrl,
 } = require('./runtime.cjs')
 
 const STARTUP_TIMEOUT_MS = 45_000
@@ -41,10 +42,6 @@ function repositoryRoot() {
   return path.resolve(__dirname, '../..')
 }
 
-function pnpmCommand() {
-  return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-}
-
 function waitForHarnessUrl(child) {
   return new Promise((resolve, reject) => {
     let startupLogTail = ''
@@ -62,6 +59,7 @@ function waitForHarnessUrl(child) {
     const stopAccumulatingOutput = () => {
       child.stdout.off('data', readStartupOutput)
       child.stderr.off('data', readStartupOutput)
+      child.off('message', readDesktopMessage)
       child.stdout.resume()
       child.stderr.resume()
       startupLogTail = ''
@@ -84,8 +82,14 @@ function waitForHarnessUrl(child) {
       if (match) finishStartup(undefined, match[1])
     }
 
+    const readDesktopMessage = (message) => {
+      const url = desktopReadyUrl(message)
+      if (url !== undefined) finishStartup(undefined, url)
+    }
+
     child.stdout.on('data', readStartupOutput)
     child.stderr.on('data', readStartupOutput)
+    child.on('message', readDesktopMessage)
     child.on('error', (error) => {
       if (backendReady) {
         reportHarnessRuntimeFailure(`DeepSeek Harness 后端在启动后发生进程错误：${error instanceof Error ? error.message : String(error)}`)
@@ -183,16 +187,31 @@ function createDesktopWindow(url) {
 
 async function startDesktopOnce() {
   app.setAppUserModelId('ai.deepseek.harness')
-  const dshHome = path.join(app.getPath('userData'), 'dsh')
+  const userData = app.getPath('userData')
+  const dshHome = path.join(userData, 'dsh')
+  const workspaceRoot = path.join(userData, 'workspace')
   fs.mkdirSync(dshHome, { recursive: true })
+  fs.mkdirSync(workspaceRoot, { recursive: true })
 
-  harnessProcess = spawn(pnpmCommand(), harnessArguments(process.env.DSH_DESKTOP_PATCHES), {
-    cwd: repositoryRoot(),
-    env: {
-      ...process.env,
-      DSH_HOME: dshHome,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
+  const launch = backendLaunch({
+    packaged: app.isPackaged,
+    repositoryRoot: repositoryRoot(),
+    resourcesPath: process.resourcesPath ?? '',
+    execPath: process.execPath,
+    dshHome,
+    workspaceRoot,
+    inheritedEnvironment: process.env,
+    rawPatches: process.env.DSH_DESKTOP_PATCHES,
+    platform: process.platform,
+  })
+  if (launch.backendEntry !== undefined && !fs.existsSync(launch.backendEntry)) {
+    throw new Error(`Packaged DeepSeek Harness backend is missing: ${launch.backendEntry}`)
+  }
+
+  harnessProcess = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    env: launch.env,
+    stdio: launch.ipc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
     windowsHide: true,
   })

@@ -26,10 +26,29 @@ interface FakeWebContents {
 }
 
 interface RuntimeModule {
+  backendLaunch: (options: {
+    packaged: boolean
+    repositoryRoot: string
+    resourcesPath: string
+    execPath: string
+    dshHome: string
+    workspaceRoot: string
+    inheritedEnvironment: NodeJS.ProcessEnv
+    rawPatches?: string
+    platform?: NodeJS.Platform
+  }) => {
+    command: string
+    args: string[]
+    cwd: string
+    env: NodeJS.ProcessEnv
+    ipc: boolean
+    backendEntry?: string
+  }
   classifyNavigation: (
     target: string,
     internalOrigin: string,
   ) => { kind: 'internal' | 'external'; url: string } | { kind: 'blocked' }
+  desktopReadyUrl: (message: unknown) => string | undefined
   harnessArguments: (rawPatches?: string) => string[]
 }
 
@@ -49,7 +68,7 @@ class FakeApp extends EventEmitter {
   readonly dock = { setIcon: vi.fn() }
   readonly quit = vi.fn()
 
-  constructor(private readonly ready: Promise<void>) {
+  constructor(private readonly ready: Promise<void>, readonly isPackaged: boolean) {
     super()
   }
 
@@ -120,9 +139,9 @@ const MAIN_PATH = resolve(import.meta.dirname, '../main.cjs')
 const nodeRequire = createRequire(import.meta.url)
 const runtime = nodeRequire('../runtime.cjs') as RuntimeModule
 
-function loadDesktopMain(): LoadedDesktop {
+function loadDesktopMain(options: { packaged?: boolean; backendExists?: boolean } = {}): LoadedDesktop {
   const ready = deferred()
-  const app = new FakeApp(ready.promise)
+  const app = new FakeApp(ready.promise, options.packaged ?? false)
   const child = new FakeChild()
   const windows: FakeWindow[] = []
   const spawn = vi.fn(() => child)
@@ -146,7 +165,12 @@ function loadDesktopMain(): LoadedDesktop {
       }
     }
     if (id === 'node:child_process') return { spawn }
-    if (id === 'node:fs') return { mkdirSync: vi.fn() }
+    if (id === 'node:fs') {
+      return {
+        existsSync: vi.fn(() => options.backendExists ?? true),
+        mkdirSync: vi.fn(),
+      }
+    }
     if (id === './runtime.cjs') {
       return {
         ...runtime,
@@ -156,9 +180,21 @@ function loadDesktopMain(): LoadedDesktop {
     return nodeRequire(id)
   }
   const fakeProcess = {
-    env: { ...process.env, DSH_DESKTOP_PATCHES: '["./vision.yml","./desktop.yml"]' },
+    env: {
+      ...process.env,
+      DSH_DESKTOP_PATCHES: '["./vision.yml","./desktop.yml"]',
+      ...(options.packaged
+        ? {
+          DSH_REPO_ROOT: '/injected/repository',
+          NODE_OPTIONS: '--require=/tmp/injected.cjs',
+          NODE_PATH: '/tmp/injected-modules',
+        }
+        : {}),
+    },
+    execPath: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness',
     exit: vi.fn(),
     platform: 'darwin',
+    resourcesPath: '/Applications/DeepSeek Harness.app/Contents/Resources',
   }
 
   vm.runInNewContext(readFileSync(MAIN_PATH, 'utf8'), {
@@ -203,6 +239,61 @@ describe('desktop main integration', () => {
     expect(desktop.child.stderr.listenerCount('data')).toBe(0)
     expect(desktop.child.stdout.resume).toHaveBeenCalledOnce()
     expect(desktop.child.stderr.resume).toHaveBeenCalledOnce()
+  })
+
+  it('starts a packaged backend from application resources without host Node or checkout injection', async () => {
+    const desktop = loadDesktopMain({ packaged: true })
+
+    desktop.ready.resolve()
+    await flushTasks()
+
+    expect(desktop.spawn).toHaveBeenCalledOnce()
+    expect(desktop.spawn).toHaveBeenCalledWith(
+      '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness',
+      [
+        '/Applications/DeepSeek Harness.app/Contents/Resources/backend/lib/bin.js',
+        'web',
+        '--port',
+        '0',
+      ],
+      expect.objectContaining({
+        cwd: '/test/user-data/workspace',
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      }),
+    )
+    const spawnOptions = desktop.spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }
+    expect(spawnOptions.env).toMatchObject({
+      DSH_DESKTOP_DEPLOYMENT: 'packaged',
+      DSH_HOME: '/test/user-data/dsh',
+      ELECTRON_RUN_AS_NODE: '1',
+    })
+    expect(spawnOptions.env).not.toHaveProperty('DSH_DESKTOP_PATCHES')
+    expect(spawnOptions.env).not.toHaveProperty('DSH_REPO_ROOT')
+    expect(spawnOptions.env).not.toHaveProperty('NODE_OPTIONS')
+    expect(spawnOptions.env).not.toHaveProperty('NODE_PATH')
+
+    desktop.child.emit('message', { type: 'dsh:desktop-ready', url: 'http://example.com:51904' })
+    await flushTasks()
+    expect(desktop.windows).toHaveLength(0)
+    desktop.child.emit('message', { type: 'dsh:desktop-ready', url: 'http://127.0.0.1:51904' })
+    await flushTasks()
+    expect(desktop.windows).toHaveLength(1)
+    expect(desktop.child.listenerCount('message')).toBe(0)
+  })
+
+  it('fails before spawn when the packaged backend entry is absent', async () => {
+    const desktop = loadDesktopMain({ packaged: true, backendExists: false })
+
+    desktop.ready.resolve()
+    await flushTasks()
+
+    expect(desktop.spawn).not.toHaveBeenCalled()
+    expect(desktop.showErrorBox).toHaveBeenCalledWith(
+      'DeepSeek Harness 启动失败',
+      expect.stringContaining('Packaged DeepSeek Harness backend is missing'),
+    )
+    expect(desktop.app.quit).toHaveBeenCalledOnce()
   })
 
   it('retains only a bounded startup-log tail before reporting startup exit', async () => {

@@ -1,11 +1,26 @@
 'use strict'
 
 const { spawnSync } = require('node:child_process')
+const path = require('node:path')
 const { setTimeout: delay } = require('node:timers/promises')
 
 const PROCESS_TREE_GRACE_MS = 3_000
 const PROCESS_TREE_FORCE_WAIT_MS = 3_000
 const PROCESS_TREE_POLL_MS = 50
+const PACKAGED_DEPLOYMENT = 'packaged'
+const DESKTOP_READY_MESSAGE = 'dsh:desktop-ready'
+const DESKTOP_SHUTDOWN_MESSAGE = 'dsh:desktop-shutdown'
+
+/** Environment names removed before the launcher installs its packaged-runtime values. */
+const PACKAGED_ENVIRONMENT_OWNED = new Set([
+  'DSH_DESKTOP_PATCHES',
+  'DSH_DESKTOP_DEPLOYMENT',
+  'DSH_HOME',
+  'DSH_REPO_ROOT',
+  'ELECTRON_RUN_AS_NODE',
+  'NODE_OPTIONS',
+  'NODE_PATH',
+])
 
 /**
  * Classify one renderer navigation without handing unsafe schemes to the OS.
@@ -63,6 +78,80 @@ function harnessArguments(rawPatches) {
 }
 
 /**
+ * Build the immutable launch contract for either the source shell or an installed application.
+ * @param {{
+ *   packaged: boolean,
+ *   repositoryRoot: string,
+ *   resourcesPath: string,
+ *   execPath: string,
+ *   dshHome: string,
+ *   workspaceRoot: string,
+ *   inheritedEnvironment: NodeJS.ProcessEnv,
+ *   rawPatches?: string,
+ *   platform?: NodeJS.Platform,
+ * }} options - Runtime locations and inherited process facts.
+ * @returns {{ command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, ipc: boolean, backendEntry?: string }} Spawn contract.
+ */
+function backendLaunch(options) {
+  if (!options.packaged) {
+    return {
+      command: (options.platform ?? process.platform) === 'win32' ? 'pnpm.cmd' : 'pnpm',
+      args: harnessArguments(options.rawPatches),
+      cwd: path.resolve(options.repositoryRoot),
+      env: {
+        ...options.inheritedEnvironment,
+        DSH_HOME: options.dshHome,
+      },
+      ipc: false,
+    }
+  }
+
+  const env = { ...options.inheritedEnvironment }
+  // Windows treats environment names case-insensitively even though the
+  // ordinary object above can retain two differently-cased keys. Normalize
+  // the comparison before installing the launcher's authoritative values so
+  // a host `node_options` cannot survive beside the controlled entries.
+  for (const name of Object.keys(env)) {
+    if (PACKAGED_ENVIRONMENT_OWNED.has(name.toUpperCase())) delete env[name]
+  }
+  env.DSH_DESKTOP_DEPLOYMENT = PACKAGED_DEPLOYMENT
+  env.DSH_HOME = options.dshHome
+  env.ELECTRON_RUN_AS_NODE = '1'
+  const backendEntry = path.join(options.resourcesPath, 'backend', 'lib', 'bin.js')
+  return {
+    command: options.execPath,
+    args: [backendEntry, ...harnessArguments(undefined).slice(1)],
+    cwd: options.workspaceRoot,
+    env,
+    ipc: true,
+    backendEntry,
+  }
+}
+
+/**
+ * Accept only the exact loopback readiness message emitted by the packaged Web runtime.
+ * @param {unknown} message - One child-process IPC payload.
+ * @returns {string | undefined} Canonical loopback URL when the payload is trusted.
+ */
+function desktopReadyUrl(message) {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return undefined
+  const candidate = /** @type {{ type?: unknown, url?: unknown }} */ (message)
+  if (candidate.type !== DESKTOP_READY_MESSAGE || typeof candidate.url !== 'string') return undefined
+  let parsed
+  try {
+    parsed = new URL(candidate.url)
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1'
+    || parsed.username !== '' || parsed.password !== '' || parsed.pathname !== '/'
+    || parsed.search !== '' || parsed.hash !== '') return undefined
+  const port = Number(parsed.port)
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined
+  return parsed.origin
+}
+
+/**
  * Return whether a detached POSIX process group still exists.
  * @param {number} pid - Process-group leader pid.
  * @returns {boolean} True while the group can still receive a signal.
@@ -109,7 +198,13 @@ function taskkillProcessTree(pid) {
 
 /**
  * Create one idempotent controller that stops the complete pnpm/dsh tree.
- * @param {{ pid?: number, exitCode: number | null, signalCode: string | null }} child - Spawned pnpm child.
+ * @param {{
+ *   pid?: number,
+ *   exitCode: number | null,
+ *   signalCode: string | null,
+ *   connected?: boolean,
+ *   send?: (message: unknown) => boolean,
+ * }} child - Spawned backend child.
  * @param {{
  *   platform?: NodeJS.Platform,
  *   graceMs?: number,
@@ -153,6 +248,15 @@ function createProcessTreeStopper(child, internals = {}) {
 
   const stopOnce = async () => {
     if (pid <= 0 || !treeAlive(pid)) return
+    if (child.connected === true && child.send !== undefined) {
+      try {
+        child.send({ type: DESKTOP_SHUTDOWN_MESSAGE })
+        if (await waitUntilGone(graceMs)) return
+      } catch {
+        // A closing IPC channel is a race, not a failed shutdown; platform
+        // termination below remains the authoritative fallback.
+      }
+    }
     if (platform === 'win32') {
       taskkill(pid)
       if (await waitUntilGone(forceWaitMs)) return
@@ -175,7 +279,9 @@ function createProcessTreeStopper(child, internals = {}) {
 }
 
 module.exports = {
+  backendLaunch,
   classifyNavigation,
   createProcessTreeStopper,
+  desktopReadyUrl,
   harnessArguments,
 }

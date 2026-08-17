@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveTelemetryPatch } from '../src/profile-boot.ts'
+import { isDesktopShutdownMessage, resolveTelemetryPatch, usesLiveUserPatches } from '../src/profile-boot.ts'
 
 describe('resolveTelemetryPatch', () => {
   it('preserves the configured telemetry mode when the hard-disable switch is unset or empty', () => {
@@ -18,5 +18,21 @@ describe('resolveTelemetryPatch', () => {
     // privacy switch has nothing to disable and generates no patch.
     expect(resolveTelemetryPatch('1', false)).toBeUndefined()
     expect(resolveTelemetryPatch(undefined, false)).toBeUndefined()
+  })
+})
+
+describe('packaged desktop control message', () => {
+  it('accepts only the exact shutdown request', () => {
+    expect(isDesktopShutdownMessage({ type: 'dsh:desktop-shutdown' })).toBe(true)
+    expect(isDesktopShutdownMessage({ type: 'dsh:desktop-shutdown', code: 0 })).toBe(false)
+    expect(isDesktopShutdownMessage({ type: 'dsh:desktop-ready' })).toBe(false)
+    expect(isDesktopShutdownMessage(null)).toBe(false)
+    expect(isDesktopShutdownMessage('dsh:desktop-shutdown')).toBe(false)
+  })
+
+  it('does not mount source HMR watchers in the immutable packaged deployment', () => {
+    expect(usesLiveUserPatches({ DSH_DESKTOP_DEPLOYMENT: 'packaged' })).toBe(false)
+    expect(usesLiveUserPatches({ DSH_DESKTOP_DEPLOYMENT: 'source' })).toBe(true)
+    expect(usesLiveUserPatches({})).toBe(true)
   })
 })

@@ -28,6 +28,9 @@ import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { REPO_ROOT, connectFreshWorkspace, newEnglishPage, probeFreePort, requireDist, saveFailureShot } from './support.ts'
 
 const WEB_SURFACE_PROMPT = fileURLToPath(new URL('./snapshots/web-runtime-context/web-surface-prompt.expected.md', import.meta.url))
+const DESKTOP_WEB_SURFACE_PROMPT = fileURLToPath(
+  new URL('./snapshots/web-runtime-context/desktop-web-surface-prompt.expected.md', import.meta.url),
+)
 
 function waitForReadyLine(child: ChildProcess): Promise<string> {
   return new Promise((resolveReady, reject) => {
@@ -220,7 +223,14 @@ describe('dsh web keyless CLI smoke', () => {
         ].join('\n\n'))
       })
     })
-    await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve))
+    await new Promise<void>((resolveListen, reject) => {
+      const failed = (error: Error): void => { reject(error) }
+      provider.once('error', failed)
+      provider.listen(0, '127.0.0.1', () => {
+        provider.off('error', failed)
+        resolveListen()
+      })
+    })
     const address = provider.address()
     if (address === null || typeof address === 'string') throw new Error('mock provider did not bind a TCP port')
     const tsxLoader = pathToFileURL(createRequire(join(REPO_ROOT, 'package.json')).resolve('tsx')).href
@@ -284,6 +294,94 @@ describe('dsh web keyless CLI smoke', () => {
             "web_search",
           ]
         `)
+    } finally {
+      const closed = child.exitCode === null
+        ? new Promise<void>((resolveClose) => { child.once('close', () => { resolveClose() }) })
+        : Promise.resolve()
+      if (child.exitCode === null) child.kill('SIGTERM')
+      await closed
+      await new Promise<void>(resolveClose => provider.close(() => { resolveClose() }))
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('projects the installed desktop context through a real packaged-mode CLI request', async () => {
+    requireDist()
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-desktop-context-'))
+
+    interface NativeProviderRequest {
+      messages?: { role?: string; content?: string }[]
+      tools?: unknown[]
+    }
+    let resolveProviderRequest!: (request: NativeProviderRequest) => void
+    const providerRequest = new Promise<NativeProviderRequest>((resolve) => {
+      resolveProviderRequest = resolve
+    })
+    const provider = createServer((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk: string) => { body += chunk })
+      request.on('end', () => {
+        const parsed = JSON.parse(body) as NativeProviderRequest
+        if ((parsed.tools?.length ?? 0) > 0) resolveProviderRequest(parsed)
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.end([
+          'data: {"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":""}}]}',
+          'data: {"choices":[{"delta":{"content":"done"}}]}',
+          'data: {"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}',
+          'data: [DONE]',
+          '',
+        ].join('\n\n'))
+      })
+    })
+    await new Promise<void>((resolveListen, reject) => {
+      const failed = (error: Error): void => { reject(error) }
+      provider.once('error', failed)
+      provider.listen(0, '127.0.0.1', () => {
+        provider.off('error', failed)
+        resolveListen()
+      })
+    })
+    const address = provider.address()
+    if (address === null || typeof address === 'string') throw new Error('mock provider did not bind a TCP port')
+    const tsxLoader = pathToFileURL(createRequire(join(REPO_ROOT, 'package.json')).resolve('tsx')).href
+    const child = spawn(
+      process.execPath,
+      ['--import', tsxLoader, join(REPO_ROOT, 'apps/cli/src/bin.ts'), 'web', '--port', '0'],
+      {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          DEEPSEEK_API_KEY: 'keyless-desktop-context',
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`,
+          DSH_DESKTOP_DEPLOYMENT: 'packaged',
+          DSH_HOME: join(workspace, '.dsh'),
+          DSH_AGENTS_HOME: join(workspace, '.agents'),
+          TSX_TSCONFIG_PATH: join(REPO_ROOT, 'tsconfig.json'),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    try {
+      const baseUrl = await waitForReadyLine(child)
+      const created = await rpc<{ sessionId: string }>(baseUrl, 'session.create', {})
+      await rpc<{ accepted: true }>(baseUrl, 'session.prompt', {
+        sessionId: created.sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: 'report desktop context' }],
+      })
+      const captured = await Promise.race([
+        providerRequest,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => { reject(new Error('desktop context request not received in 10s')) }, 10_000).unref()
+        }),
+      ])
+      const systemMessage = captured.messages?.find(message => message.role === 'system')
+      const expected = readFileSync(DESKTOP_WEB_SURFACE_PROMPT, 'utf8').trimEnd()
+        .replace('{{webUrl}}', baseUrl)
+      expect(systemMessage?.content).toContain(expected)
+      expect(systemMessage?.content).not.toContain('implementation checkout')
+      expect(systemMessage?.content).not.toContain('pnpm run dev:web')
     } finally {
       const closed = child.exitCode === null
         ? new Promise<void>((resolveClose) => { child.once('close', () => { resolveClose() }) })
