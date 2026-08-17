@@ -4,15 +4,17 @@ Status: implemented
 
 English | [中文](2026-08-16-desktop-source-shell.zh.md)
 
+Scope update: this decision remains the source-development contract. The self-contained installed mode and its independent release lane are owned by [self-contained desktop distribution](2026-08-17-desktop-packaged-distribution.md).
+
 ## Problem
 
 Developers need a native window around the shipped Web application without creating a second UI composition. An Electron entry also introduces machine-wide installation risk, privileged external-link handling, and a process-tree owner: a package lifecycle script can mutate the shared Electron bundle, renderer links can reach operating-system URL handlers, and killing only the pnpm wrapper can orphan the `dsh web` backend.
 
-The repository has no desktop packaging, signing, notarization, update, or standalone runtime flow. Treating the development entry as a release member would make the dsh npm family require its unrelated version and attempt to publish a private package that cannot run outside a source checkout.
+The source-development entry must stay separate from desktop packaging, signing, notarization, and standalone runtime distribution. Treating that entry as an npm release member would make the dsh family require its unrelated version and attempt to publish a private package whose source mode cannot run outside a checkout.
 
 ## Decision
 
-`apps/desktop` is a private source-checkout development shell over the existing loopback Web carrier described by the [GUI layering decision](2026-07-19-gui-layering-and-rpc-protocol.md). It runs `pnpm dsh web --port 0` from `DSH_REPO_ROOT`, embeds the reported loopback URL, and stores its isolated `DSH_HOME` under Electron's application user-data directory. It requires an installed and built repository; it is not a packaged desktop application or a second Host/Client assembly. The operational contract lives in the [desktop README](../../../../apps/desktop/README.md).
+In source mode, `apps/desktop` is a private checkout development shell over the existing loopback Web carrier described by the [GUI layering decision](2026-07-19-gui-layering-and-rpc-protocol.md). It runs `pnpm dsh web --port 0` from `DSH_REPO_ROOT`, embeds the reported loopback URL, and stores its isolated `DSH_HOME` under Electron's application user-data directory. This mode requires an installed and built repository; it is neither the packaged launch path nor a second Host/Client assembly. The operational contract lives in the [desktop README](../../../../apps/desktop/README.md).
 
 Installation and startup run no repository-owned lifecycle hook. The shell never patches `Electron.app`, Electron package resources, application metadata, or a launcher under the user's Desktop, and it does not override Electron's download-control environment. Runtime window and Dock icons use Electron APIs only.
 
@@ -30,7 +32,7 @@ The centralized release-directory policy in `scripts/release/workspace-members.t
 
 **Publish the shell with the dsh npm family.** Rejected because its entry requires pnpm, a source checkout, and built workspace artifacts. A private local tool is explicitly excluded rather than temporarily made version-compatible with an artifact it cannot provide.
 
-**Build an Electron IPC carrier immediately.** Rejected because the shipped Web carrier already provides the complete application and loopback trust checks. IPC becomes a separate carrier decision only with a standalone packaged runtime.
+**Build an Electron renderer-to-main IPC carrier.** Rejected because the shipped Web carrier already provides the complete application and loopback trust checks. Packaged distribution retains that carrier and uses child-process IPC only for readiness and orderly shutdown.
 
 **Kill only the direct pnpm child.** Rejected because pnpm launches the CLI as a descendant and can exit before it; direct-child state cannot prove the owned tree is quiescent.
 
@@ -40,4 +42,4 @@ The desktop shell reuses the exact Web composition and can apply explicit local 
 
 Root Vitest discovers `apps/desktop/tests/**/*.spec.ts`. The runtime and main-integration suites cover patch parsing and argv order, navigation and redirect classification and wiring, bounded startup logging and pipe draining, post-start backend failures, single startup, POSIX escalation, Windows tree termination, and coalesced quit behavior. Release-family tests pin the local-only directory and negative pnpm filter.
 
-The shell costs one local Electron dependency and still creates an application user-data directory at runtime. A force-kill or missing `taskkill` that cannot prove termination fails the quit operation visibly instead of claiming cleanup. Distribution remains absent: installers, standalone dependencies, code signing, notarization, auto-update, binary licenses, and platform packaging require a separate decision and release path.
+The source shell costs one local Electron dependency and still creates an application user-data directory at runtime. A force-kill or missing `taskkill` that cannot prove termination fails the quit operation visibly instead of claiming cleanup. Installer composition, standalone dependencies, signing, notarization, native verification, and release tags remain outside this decision; the packaged-distribution decision owns them. Automatic updates remain absent.

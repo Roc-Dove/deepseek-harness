@@ -4,15 +4,17 @@ Status: implemented
 
 [English](2026-08-16-desktop-source-shell.md) | 中文
 
+范围更新：本决策继续负责源码开发约定。自包含安装模式及其独立发布通道由[自包含桌面发行](2026-08-17-desktop-packaged-distribution.md)负责。
+
 ## 问题
 
 开发者需要在原生窗口中承载已交付的 Web 应用，同时不建立第二套 UI 组装。Electron 入口也会带来机器级安装风险、特权外链处理和进程树所有权：package 生命周期脚本可以修改共享 Electron bundle，renderer 链接可以触达操作系统 URL handler，而只杀 pnpm 包装进程会遗留 `dsh web` 后端。
 
-仓库没有桌面打包、签名、公证、更新或独立运行时流程。若把开发入口当作发布成员，dsh npm 族就会要求它采用无关的统一版本，并尝试发布一个离开源码仓库便无法运行的私有 package。
+源码开发入口必须与桌面打包、签名、公证和独立运行时发行保持分离。若把该入口当作 npm 发布成员，dsh 族就会要求它采用无关的统一版本，并尝试发布一个源码模式离开仓库便无法运行的私有 package。
 
 ## 决策
 
-`apps/desktop` 是现有回环 Web 载体之上的私有源码仓库开发壳；该载体由 [GUI 分层决策](2026-07-19-gui-layering-and-rpc-protocol.md)描述。它从 `DSH_REPO_ROOT` 运行 `pnpm dsh web --port 0`，嵌入进程报告的回环 URL，并把隔离的 `DSH_HOME` 放在 Electron 应用用户数据目录下。它要求仓库已安装依赖并完成构建，既不是打包后的桌面应用，也不是第二套 Host/Client 组装。操作约定见[桌面 README](../../../../apps/desktop/README.md)。
+在源码模式下，`apps/desktop` 是现有回环 Web 载体之上的私有源码仓库开发壳；该载体由 [GUI 分层决策](2026-07-19-gui-layering-and-rpc-protocol.md)描述。它从 `DSH_REPO_ROOT` 运行 `pnpm dsh web --port 0`，嵌入进程报告的回环 URL，并把隔离的 `DSH_HOME` 放在 Electron 应用用户数据目录下。这个模式要求仓库已安装依赖并完成构建；它既不是打包启动路径，也不是第二套 Host/Client 组装。操作约定见[桌面 README](../../../../apps/desktop/README.md)。
 
 安装和启动不运行仓库自有的生命周期 hook。桌面壳不修改 `Electron.app`、Electron package 资源、应用元数据或用户 Desktop 下的启动器，也不覆盖 Electron 下载控制环境变量。运行时窗口与 Dock 图标仅使用 Electron API。
 
@@ -30,7 +32,7 @@ renderer 导航在使用前解析。同源 HTTP 导航与重定向留在现有�
 
 **随 dsh npm 族发布桌面壳。** 拒绝，因为其入口依赖 pnpm、源码仓库和已构建 workspace 产物。私有本地工具被显式排除，而不是为了一个它无法提供的产物暂时对齐版本。
 
-**立即构建 Electron IPC 载体。** 拒绝，因为已交付的 Web 载体已经提供完整应用和回环信任检查。只有独立打包运行时出现时，IPC 才成为单独的载体决策。
+**构建 Electron renderer-to-main IPC 载体。** 拒绝，因为已交付的 Web 载体已经提供完整应用和回环信任检查。打包发行保留该载体，子进程 IPC 只用于就绪通知与有序停止。
 
 **只结束直接 pnpm 子进程。** 拒绝，因为 pnpm 把 CLI 作为后代进程启动，而且可能先于它退出；直接子进程状态不能证明自有进程树已经完全停稳。
 
@@ -40,4 +42,4 @@ renderer 导航在使用前解析。同源 HTTP 导航与重定向留在现有�
 
 根 Vitest 会发现 `apps/desktop/tests/**/*.spec.ts`。runtime 与 main 集成测试覆盖 patch 解析和 argv 顺序、导航与重定向分类及接线、有界启动日志与管道排空、启动后的后端故障、单次启动、POSIX 升级、Windows 进程树结束和退出合并。发布族测试固定 local-only 目录与 pnpm 负 filter。
 
-桌面壳的代价是一份本地 Electron 依赖，运行时仍会创建应用用户数据目录。若强杀或缺失的 `taskkill` 无法证明进程已经结束，退出操作会明确失败，而不会声称清理成功。发行能力仍不存在：安装器、独立依赖、代码签名、公证、自动更新、二进制许可和各平台打包都需要独立决策与发布路径。
+源码壳的代价是一份本地 Electron 依赖，运行时仍会创建应用用户数据目录。若强杀或缺失的 `taskkill` 无法证明进程已经结束，退出操作会明确失败，而不会声称清理成功。安装器组装、独立依赖、签名、公证、原生验证与发行 tag 不属于本决策，由打包发行决策负责。自动更新仍不存在。
