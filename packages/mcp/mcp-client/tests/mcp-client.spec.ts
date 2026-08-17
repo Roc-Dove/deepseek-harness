@@ -72,6 +72,7 @@ async function mountRegistry(): Promise<Context> {
 
 const defaultOpts: ToolBridgeOptions = {
   registrationFailure: 'contain',
+  requireApproval: false,
   serverName: 'srv',
   toolCallTimeoutMs: 60_000,
 }

@@ -42,6 +42,12 @@ profile 目录包含一个 `package.json`，其中记录树外插件依赖，以
 
 层的确切优先级、flag、关闭行为、部署默认值和源码执行方式，以 [CLI（命令行界面）行为参考](reference/README.md)为准。
 
+## 随附的电脑操作预设
+
+本 package 随附 `config/agent-presets/computer-use`，因此 `dsh web` 无需复制开发者本机 `DSH_HOME` 就会显示**电脑操作**。它由标准模式组装加上一条经过审查、连接另行安装的 `/Applications/KimiCU.app` 的 MCP 配置组成；本 package 不包含 KimiCU。当前为这项集成验证的 KimiCU 0.5.8 只有 arm64 版本，需要运行 macOS 14 或更高版本的 Apple 芯片 Mac，并需开启屏幕录制与辅助功能权限。本仓库不会再分发 KimiCU，也不提供通用下载镜像。
+
+KimiCU 缺失时，预设仍然可用，会保留标准模式工具，但没有 `mcp__kimi-cu__*` 工具。在交互式审批策略下，每次已注册 KimiCU MCP 调用都会在分发前询问；把审批解析为 `never` 的策略会直接拒绝。这项要求只保护经已注册 MCP 工具路由的调用，并不是围绕 KimiCU 或本预设标准模式 Shell 的沙箱。屏幕和辅助功能结果可能发送给选中的模型服务商，并持久化到会话历史。默认 DeepSeek 路由能使用辅助功能文本，但不能直接理解截图像素；视觉理解需要支持图片输入的路由。完整的平台、权限、数据流与恢复边界见[桌面指南](../desktop/README.md#computer-use-with-kimicu-on-macos)。
+
 ## 开发
 
 生产运行需要已构建的包与前端产物。请在仓库根目录单独运行 `pnpm run build`，然后使用 `pnpm dsh <args...>` 运行 TypeScript 入口并转发所有参数；模块解析约定以[源码执行参考](reference/README.md#source-execution)为准。

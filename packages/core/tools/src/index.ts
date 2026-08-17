@@ -223,6 +223,15 @@ export interface ToolDefinition extends ToolSchema {
   /** Mandatory canonical output declaration. */
   readonly output: ToolOutputDefinition
   /**
+   * Require one user approval before this definition may dispatch. The
+   * registry snapshots this owner policy when execution starts and applies it
+   * after the reorderable `tools/pre-execute` waterfall, upgrading only a
+   * final allow decision to ask. Listener ordering therefore cannot bypass
+   * the requirement; an existing deny or ask remains authoritative. This
+   * metadata is never sent to the model.
+   */
+  readonly requiresApproval?: boolean
+  /**
    * Run one accepted call and return only its canonical lossless-JSON value.
    * Async work must observe or forward `exec.signal` and settle only after its
    * owned work reaches quiescence. The registry preserves caller cancellation
@@ -371,10 +380,11 @@ export interface CodeDispatchLog {
 
 /**
  * One pending tool call inside the registry pipeline. Parsed arguments cross
- * one lossless-JSON materialization boundary before policy and are deep-frozen;
- * call identity, the caller signal, and the registry-assigned {@link token} are
- * readonly. The registry freezes the complete object before `tools/result`
- * observers run.
+ * one lossless-JSON materialization boundary before policy and are deep-frozen.
+ * The live object is sealed at creation: identity and arguments are runtime
+ * non-writable, while only `signal` remains writable for the documented
+ * around-dispatch replacement. The registry freezes the complete object before
+ * `tools/result` observers run.
  */
 export interface ToolExecution extends ToolExecutionInput {
   /** Root model-requested call, resolved for every root and nested execution. */
@@ -422,6 +432,21 @@ export interface ToolRunContext extends ToolExecution {
 
 /** Registry-owned live execution object; public pipeline views stay readonly. */
 type MutableToolRunContext = Omit<ToolRunContext, 'signal'> & { signal: AbortSignal }
+
+/**
+ * Make the execution identity and arguments runtime-immutable while retaining
+ * the one documented mutable field (`signal`) for around-dispatch wrappers.
+ */
+function sealToolExecution(execution: MutableToolRunContext): MutableToolRunContext {
+  for (const key of Reflect.ownKeys(execution)) {
+    if (key === 'signal') continue
+    const descriptor = Object.getOwnPropertyDescriptor(execution, key)
+    /* v8 ignore next -- every own key returned above has a descriptor */
+    if (descriptor === undefined) throw new Error('tool execution property invariant violated')
+    Object.defineProperty(execution, key, { ...descriptor, writable: false })
+  }
+  return Object.seal(execution)
+}
 
 /**
  * Scheduler-only result after ordered pre-execute and guards. A `post-result`
@@ -589,6 +614,31 @@ export type PreToolDecision =
   | { kind: 'allow' }
   | { kind: 'deny'; reason: string }
   | { kind: 'ask'; reason?: string }
+
+/** Validate and detach one plugin-authored pre-dispatch decision. */
+function normalizePreToolDecision(value: unknown): PreToolDecision {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('tools/pre-execute returned an invalid decision')
+  }
+  const decision = value as { kind?: unknown; reason?: unknown }
+  switch (decision.kind) {
+    case 'allow': return { kind: 'allow' }
+    case 'deny': {
+      if (typeof decision.reason !== 'string') {
+        throw new TypeError('tools/pre-execute returned an invalid deny decision')
+      }
+      return { kind: 'deny', reason: decision.reason }
+    }
+    case 'ask': {
+      if (decision.reason === undefined) return { kind: 'ask' }
+      if (typeof decision.reason !== 'string') {
+        throw new TypeError('tools/pre-execute returned an invalid ask decision')
+      }
+      return { kind: 'ask', reason: decision.reason }
+    }
+    default: throw new TypeError('tools/pre-execute returned an invalid decision kind')
+  }
+}
 
 /**
  * Post-dispatch decision: accept, replace one projection, attach context for the
@@ -808,6 +858,12 @@ export class ToolRuntime extends Service {
   private cancellationStates = new WeakMap<ToolRunContext, ToolCancellationState>()
   /** Definition-owned final content transform snapshotted before policy begins. */
   private contentFinalizers = new WeakMap<ToolRunContext, ToolDefinition['finalizeContent']>()
+  /** Immutable execution contract owned by each caller-visible registration object. */
+  private definitionContracts = new WeakMap<ToolDefinition, ToolDefinition>()
+  /** Definition-owned approval requirement snapshotted before policy begins. */
+  private approvalRequirements = new WeakSet<ToolExecution>()
+  /** Exact visible definition (or null for unknown) captured before policy begins. */
+  private executionDefinitions = new WeakMap<ToolExecution, ToolDefinition | null>()
   private readonly layers = new ScopedLayers(
     scope => new ToolLayer(scope),
     () => { this.ctx.emit('tools/change') },
@@ -981,7 +1037,7 @@ export class ToolRuntime extends Service {
     const view = this.view(scope)
     const mode = this.modeFor(scope)
     if (mode === 'native') {
-      const schemas = [...view.visible.values()].map(definition => this.schemaOf(definition, false))
+      const schemas = [...view.visible.values()].map(definition => this.schemaOf(this.contractOf(definition), false))
       return { schemas, knownNames: [...view.knownNames] }
     }
     // Validate the runtime language BEFORE projecting schemas: schemaOf reads
@@ -990,7 +1046,7 @@ export class ToolRuntime extends Service {
     // renderer-table rejection the canonical assembly-time error for a
     // language with no SDK renderer.
     this.requireCodeRuntime(mode)
-    const schemas = [...view.visible.values()].map(definition => this.schemaOf(definition, false))
+    const schemas = [...view.visible.values()].map(definition => this.schemaOf(this.contractOf(definition), false))
     if (mode === 'code') {
       return {
         schemas: schemas.filter(schema => schema.name === RUN_CODE_NAME),
@@ -1031,7 +1087,11 @@ export class ToolRuntime extends Service {
   /**
    * Register globally or in the calling agent scope. Scoped tools shadow
    * globals; duplicates within one layer and the reserved `run_code` name fail.
-   * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
+   * `get()` preserves the supplied object identity, while execution and wire
+   * schema use the immutable contract captured at its first successful
+   * registration. Failed insertions retain no provisional contract, and a
+   * later registration of the same object cannot change `requiresApproval`.
+   * @param definition - tool schema, execution, and optional approval/finalization/presentation callbacks.
    * @returns the exact disposer that unregisters the tool.
    */
   register(definition: ToolDefinition): () => void {
@@ -1054,11 +1114,76 @@ export class ToolRuntime extends Service {
     if (name === RUN_CODE_NAME) {
       throw new Error(`tool name "${RUN_CODE_NAME}" is reserved for the Code Mode presentation transport and cannot be registered or shadowed`)
     }
-    return this.layers.effect(
-      this.ctx,
-      layer => layer.tools.insert(name, definition),
-      { label: 'tools.register()' },
-    )
+    const parameters = snapshotJsonValue(definition.parameters)
+    if (parameters === undefined) {
+      throw new TypeError(`tool "${name}" parameters must be losslessly JSON-serializable`)
+    }
+    const outputSchema = snapshotJsonValue(output.schema)
+    /* v8 ignore next -- supported JsonSchemaNode values are lossless JSON */
+    if (outputSchema === undefined) {
+      throw new TypeError(`tool "${name}" output schema must be losslessly JSON-serializable`)
+    }
+    // `get()` deliberately preserves the caller's object identity for scoped
+    // shadow checks and re-registration. Execution never rereads that mutable
+    // object: its first successful registration owns one immutable contract,
+    // so approval cannot authorize a later callback/schema/argument mutation.
+    // A failed insertion rolls its provisional contract back. Re-registering
+    // the same object with changed approval policy is rejected explicitly.
+    let registered = this.definitionContracts.get(definition)
+    let provisionalContract = false
+    if (registered === undefined) {
+      const registeredOutput: ToolOutputDefinition = Object.freeze({
+        schema: deepFreeze(outputSchema),
+        render: output.render.bind(output),
+        ...output.presentationMeta === undefined
+          ? {}
+          : { presentationMeta: output.presentationMeta.bind(output) },
+      })
+      registered = Object.freeze({
+        name,
+        description: definition.description,
+        parameters: deepFreeze(parameters),
+        output: registeredOutput,
+        execute: definition.execute.bind(definition),
+        ...definition.requiresApproval === true ? { requiresApproval: true } : {},
+        ...timeoutMs === undefined ? {} : { timeoutMs },
+        ...definition.finalizeContent === undefined
+          ? {}
+          : { finalizeContent: definition.finalizeContent.bind(definition) },
+        ...definition.isConcurrencySafe === undefined
+          ? {}
+          : { isConcurrencySafe: definition.isConcurrencySafe.bind(definition) },
+        ...definition.presentCall === undefined
+          ? {}
+          : { presentCall: definition.presentCall.bind(definition) },
+        ...definition.presentResult === undefined
+          ? {}
+          : { presentResult: definition.presentResult.bind(definition) },
+      })
+      this.definitionContracts.set(definition, registered)
+      provisionalContract = true
+    } else if (registered.name !== name) {
+      throw new TypeError(`a registered tool definition cannot change its name from "${registered.name}" to "${name}"`)
+    } else if ((registered.requiresApproval === true) !== (definition.requiresApproval === true)) {
+      throw new TypeError('a registered tool definition cannot change requiresApproval after its first successful registration')
+    }
+    try {
+      return this.layers.effect(
+        this.ctx,
+        layer => layer.tools.insert(name, definition),
+        { label: 'tools.register()' },
+      )
+    } catch (error: unknown) {
+      // A duplicate or other failed insertion never owns the definition's
+      // immutable contract. Let the same caller object be corrected and
+      // registered later without inheriting security metadata from a failed
+      // attempt. The provisional entry must exist during effect notification,
+      // where prompt/schema readers can observe a successful insertion.
+      if (provisionalContract && this.definitionContracts.get(definition) === registered) {
+        this.definitionContracts.delete(definition)
+      }
+      throw error
+    }
   }
 
   /**
@@ -1192,6 +1317,15 @@ export class ToolRuntime extends Service {
     return { visible, knownNames, restrictableNames }
   }
 
+  /** Registry-owned immutable contract for one caller-visible definition. */
+  private contractOf(definition: ToolDefinition): ToolDefinition {
+    if (definition === this.codeTransport) return definition
+    const contract = this.definitionContracts.get(definition)
+    /* v8 ignore next -- every non-transport view entry came through register() */
+    if (contract === undefined) throw new Error(`tool registry invariant violated: missing contract for "${definition.name}"`)
+    return contract
+  }
+
   /**
    * Look up a tool as one scope sees it (scoped
    * shadows global; a restricted-away global reads as absent). Presenters pass
@@ -1199,7 +1333,7 @@ export class ToolRuntime extends Service {
    * actually executed.
    * @param name - the tool name as registered.
    * @param scope - the viewing scope (the agent); omitted = the global view.
-   * @returns the definition the scope resolves, or undefined when none is visible.
+   * @returns the original registration object the scope resolves, or undefined when none is visible.
    */
   get(name: string, scope?: ScopeKey): ToolDefinition | undefined {
     return this.view(scope).visible.get(name)
@@ -1222,7 +1356,7 @@ export class ToolRuntime extends Service {
     const tool = this.get(name, scope)
     if (tool === undefined) return undefined
     if (this.collapses(name, scope, nested)) return undefined
-    return tool
+    return this.contractOf(tool)
   }
 
   /**
@@ -1232,7 +1366,7 @@ export class ToolRuntime extends Service {
    * @returns one deep-cloned schema per visible tool.
    */
   schemas(scope?: ScopeKey): ToolSchema[] {
-    return [...this.view(scope).visible.values()].map(definition => this.schemaOf(definition, true))
+    return [...this.view(scope).visible.values()].map(definition => this.schemaOf(this.contractOf(definition), true))
   }
 
   /** Project visible callable tools onto the generated Code Mode SDK contract. */
@@ -1240,6 +1374,7 @@ export class ToolRuntime extends Service {
     return [...this.view(scope).visible.values()]
       .filter(definition => definition.name !== RUN_CODE_NAME)
       .map((definition): ToolSdkSchema => {
+        definition = this.contractOf(definition)
         const output = snapshotJsonValue(definition.output.schema)
         /* v8 ignore next -- registration already validated and retained this schema as lossless JSON. */
         if (output === undefined) {
@@ -1256,6 +1391,7 @@ export class ToolRuntime extends Service {
   private schemaOf(definition: ToolDefinition, detachParameters: boolean): ToolSchema {
     const { name, description, parameters } = definition
     const detached = detachParameters ? snapshotJsonValue(parameters) : parameters
+    /* v8 ignore next -- every stored contract was losslessly snapshotted before entering a registry layer */
     if (detached === undefined) {
       throw new Error(`tool "${name}" parameters must be lossless JSON before schema projection`)
     }
@@ -1377,7 +1513,8 @@ export class ToolRuntime extends Service {
     // observe — or worse, approve — a call that can only fail. An unknown tool
     // keeps the historical dispatch-stage `UNKNOWN_TOOL` path so policy
     // listeners still see every name that reaches the registry.
-    const visible = this.get(name, agent)
+    const exposed = this.get(name, agent)
+    const visible = exposed === undefined ? undefined : this.contractOf(exposed)
     const collapsed = visible !== undefined && this.collapses(name, agent, parent !== undefined)
     const concludingExecutions = this.concludingExecutions
     const base = {
@@ -1406,6 +1543,7 @@ export class ToolRuntime extends Service {
     // invalid-args failure of a NON-ABORTED collapsed call drop it (the call
     // could never execute).
     const capturedFinalizer = visible?.finalizeContent?.bind(visible)
+    const capturedApprovalRequirement = visible?.requiresApproval === true
     const finalizerFor = (): ToolDefinition['finalizeContent'] | undefined =>
       collapsed && !signal.aborted ? undefined : capturedFinalizer
     try {
@@ -1413,9 +1551,11 @@ export class ToolRuntime extends Service {
       if (detached === undefined) {
         throw new TypeError('tool execution arguments must be losslessly JSON-serializable')
       }
-      const execution: MutableToolRunContext = { ...base, arguments: deepFreeze(detached) }
+      const execution = sealToolExecution({ ...base, arguments: deepFreeze(detached) })
       this.deferredContexts.set(execution, deferredContexts)
       this.contentFinalizers.set(execution, finalizerFor())
+      if (capturedApprovalRequirement) this.approvalRequirements.add(execution)
+      this.executionDefinitions.set(execution, visible ?? null)
       this.cancellationStates.set(execution, {
         callerSignal: signal,
         bodyInvoked: false,
@@ -1444,7 +1584,7 @@ export class ToolRuntime extends Service {
       }
       return { kind: 'ready', exec: execution }
     } catch (error: unknown) {
-      const execution: MutableToolRunContext = { ...base, arguments: undefined }
+      const execution = sealToolExecution({ ...base, arguments: undefined })
       this.contentFinalizers.set(execution, finalizerFor())
       return { kind: 'final-result', exec: execution, result: toolErrorResult(error) }
     }
@@ -1472,13 +1612,16 @@ export class ToolRuntime extends Service {
     }
     try {
       const carrier = scopeTarget(this, exec.agent)
-      const gate = await this.ctx.waterfall(
+      const gate = normalizePreToolDecision(await this.ctx.waterfall(
         carrier, 'tools/pre-execute', exec,
         () => Promise.resolve<PreToolDecision>({ kind: 'allow' }),
-      )
-      const askResolution: ToolAskResolution = gate.kind === 'ask'
-        ? await this.serviceAsk(exec, gate)
-        : { decision: gate, approvalCancelled: false }
+      ))
+      const ownerGate: PreToolDecision = gate.kind === 'allow' && this.approvalRequirements.has(exec)
+        ? { kind: 'ask', reason: `Allow tool "${exec.name}" to run.` }
+        : gate
+      const askResolution: ToolAskResolution = ownerGate.kind === 'ask'
+        ? await this.serviceAsk(exec, ownerGate)
+        : { decision: ownerGate, approvalCancelled: false }
       const { decision } = askResolution
       if (this.callerCancelled(exec) && askResolution.approvalCancelled) {
         return await next({ kind: 'post-result', exec, result: toolAbortedBeforeDispatchResult() })
@@ -1514,6 +1657,23 @@ export class ToolRuntime extends Service {
     return state.callerSignal.aborted
   }
 
+  /**
+   * Return the exact definition captured for this execution only while that
+   * same object remains visible. Policy listeners and around wrappers may
+   * mutate the registry, but a replacement definition must start a new call
+   * so its own approval and output contracts cannot be skipped.
+   */
+  private executionDefinition(exec: ToolExecution): ToolDefinition | undefined {
+    /* v8 ignore next -- only registry-minted ready executions reach dispatch/normalization */
+    if (!this.executionDefinitions.has(exec)) {
+      throw new Error('tool registry scheduler invariant violated: missing execution definition')
+    }
+    const captured = this.executionDefinitions.get(exec)
+    if (captured === null || captured === undefined) return undefined
+    const current = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+    return current === captured ? captured : undefined
+  }
+
   /** Canonical cancellation outcome selected by whether the tool body started. */
   private cancellationResult(exec: ToolRunContext, prior?: ToolExecutionResult): ToolExecutionResult {
     const state = this.cancellationStates.get(exec)
@@ -1543,7 +1703,7 @@ export class ToolRuntime extends Service {
     }
     exec.signal = signal
     try {
-      const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+      const tool = this.executionDefinition(exec)
       if (!tool) throw new ToolNotFoundError(exec.name)
       state.bodyInvoked = true
       const returned = await tool.execute(exec.arguments, exec)
@@ -1765,7 +1925,7 @@ export class ToolRuntime extends Service {
       if (result.isError) {
         throw new TypeError('tools/post-execute cannot replace the value of a failed result')
       }
-      const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+      const tool = this.executionDefinition(exec)
       if (tool === undefined) throw new ToolNotFoundError(exec.name)
       const replaced = this.createSuccessResult(exec, tool, decision.value)
       return this.markCanonical(exec, {
@@ -1834,7 +1994,7 @@ export class ToolRuntime extends Service {
         ...result.additionalContexts !== undefined ? { additionalContexts: result.additionalContexts } : {},
       })
     }
-    const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+    const tool = this.executionDefinition(exec)
     if (tool === undefined) throw new ToolNotFoundError(exec.name)
     const normalized = this.createSuccessResult(exec, tool, result.value)
     return this.markCanonical(exec, {

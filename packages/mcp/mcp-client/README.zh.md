@@ -44,6 +44,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 | `url` | http | 是 | MCP 服务器 URL |
 | `headers` | http | 否 | 额外标头（例如认证 token） |
 | `toolCallTimeoutMs` | 两者 | 否 | 每次 `callTool` 调用的超时（默认 60000） |
+| `requireApproval` | 两者 | 否 | 把该服务器注册的每个工具标记为分发前必须通过 Harness 审批（默认 `false`） |
 | `failOnStartupError` | 两者 | 否 | 初始连接或工具同步失败时拒绝插件激活（默认 `false`） |
 | `reconnect.enabled` | 两者 | 否 | 连接丢失后自动重新连接（默认 `true`） |
 | `reconnect.initialDelayMs` | 两者 | 否 | 首次重连延迟（毫秒）；每次连续失败尝试翻倍（默认 500） |
@@ -64,6 +65,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 - 连接时：插件激活会等待 `listTools()`，并在组合开始首个轮次前通过 `ctx.tools.register()` 以公开名称注册每个工具。初始连接、发现或注册失败始终会记录日志；`failOnStartupError` 为 true 时拒绝激活，否则插件仍会激活但不注册工具。
 - 监听 `notifications/tools/list_changed` → 重新同步；获取阶段失败时保留上一世代的注册，注册冲突则会回滚本次尝试的世代，并且不保留该服务器的任何工具。
 - 工具执行：`client.callTool({ name: rawName, arguments }, { signal })`，支持超时 + 中止；公开名称绝不会发给服务器。
+- `requireApproval` 为 true 时，每个已注册定义都会在 `callTool` 前持有最终审批要求。注册表在可重排的 pre-execute waterfall 之后应用它，因此外层允许无法绕过；拒绝仍然更强，部署没有可用审批应答器时会关闭式失败，不会联系 MCP 服务器。这项要求只覆盖经该已注册 MCP 工具路由的调用；它不是进程沙箱，无法阻止另一个 Shell 或插件通过其他路径启动同一可执行文件。
 - 规范成功值是 `{ content: JsonValue[], structuredContent? }`。非图片 MCP 块保持不变，但非字符串 `text` 值会被移除，并渲染为明确的无效内容占位符。每个通过准入的图片块在持久化保存后会替换为 `{ type: "image", attachment }`，因此其 base64 载荷不会保留在规范值中；`structuredContent` 保持不变。受支持且已声明的 `outputSchema` 会验证 `structuredContent`；不受支持的 schema 词汇会回退为不受约束的 `JsonValue`。
 - Native／模型渲染按协议顺序保留文本块；音频、资源、不受支持的块和未通过准入的图片块会变成占位符。部署挂载 `attachments` 且调用路由声明支持 `image` 输入时，通过准入的图片块会通过持久化附件进入模型。媒体类型不受支持、图片字节无效，或触发图片数量／字节限制时，受影响的块会降级并记录警告；附件存储失败会使工具调用失败。
 - MCP 服务器不能提供本地附件能力。入站 `attachment` 字段会被剥离并记录警告，且不会读取或解析其中的 ID。携带图片字节的块必须重新经过普通准入，只有该次调用成功执行 `saveImage()` 后返回的引用才能进入规范结果或模型上下文。

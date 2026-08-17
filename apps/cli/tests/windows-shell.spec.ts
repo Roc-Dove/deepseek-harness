@@ -103,23 +103,48 @@ describe('the shipped shell composition (real bundle layers)', () => {
 describe('shipped agent presets gate both shell tools by platform', () => {
   const presetRoot = resolve(fileURLToPath(new URL('../package.json', import.meta.url)), '..', 'config', 'agent-presets')
 
-  it.each(['standard', 'code', 'cordis'])('preset %s gates its shell tool rows by platform', (preset) => {
+  it.each(['standard', 'code', 'cordis', 'computer-use'])(
+    'preset %s gates its shell tool rows by platform', (preset) => {
+      const entries: unknown = yaml.load(
+        readFileSync(join(presetRoot, preset, 'agent.cordis.yml'), 'utf8'),
+        { schema: entryListSchema },
+      )
+      if (!Array.isArray(entries)) throw new TypeError(`preset ${preset} must parse to an entry array`)
+      for (const [id, win32] of [['tool-bash', true], ['tool-pwsh', false]] as const) {
+        const row = entries.find((entry): entry is Record<string, unknown> => (
+          typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).id === id
+        ))
+        if (row === undefined) throw new TypeError(`preset ${preset} must mount ${id}`)
+        expect(row.disabled).toMatchObject({ __jsExpr: expect.any(String) as string })
+        // A platform-scoped context pins both outcomes on every host.
+        const expression = (row.disabled as { __jsExpr: string }).__jsExpr
+        expect(Boolean(evaluate({ process: { platform: 'win32' } }, expression)), `${id} on win32`).toBe(win32)
+        expect(Boolean(evaluate({ process: { platform: 'linux' } }, expression)), `${id} on linux`).toBe(!win32)
+      }
+    })
+
+  it('keeps the separately installed KimiCU optional and bounded', () => {
     const entries: unknown = yaml.load(
-      readFileSync(join(presetRoot, preset, 'agent.cordis.yml'), 'utf8'),
+      readFileSync(join(presetRoot, 'computer-use', 'agent.cordis.yml'), 'utf8'),
       { schema: entryListSchema },
     )
-    if (!Array.isArray(entries)) throw new TypeError(`preset ${preset} must parse to an entry array`)
-    for (const [id, win32] of [['tool-bash', true], ['tool-pwsh', false]] as const) {
-      const row = entries.find((entry): entry is Record<string, unknown> => (
-        typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).id === id
-      ))
-      if (row === undefined) throw new TypeError(`preset ${preset} must mount ${id}`)
-      expect(row.disabled).toMatchObject({ __jsExpr: expect.any(String) as string })
-      // A platform-scoped context pins both outcomes on every host.
-      const expression = (row.disabled as { __jsExpr: string }).__jsExpr
-      expect(Boolean(evaluate({ process: { platform: 'win32' } }, expression)), `${id} on win32`).toBe(win32)
-      expect(Boolean(evaluate({ process: { platform: 'linux' } }, expression)), `${id} on linux`).toBe(!win32)
-    }
+    if (!Array.isArray(entries)) throw new TypeError('computer-use preset must parse to an entry array')
+    const row = entries.find((entry): entry is Record<string, unknown> => (
+      typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).id === 'mcp-kimi-cu'
+    ))
+
+    expect(row).toMatchObject({
+      name: '@deepseek-ai/dsh-mcp-client',
+      config: {
+        serverName: 'kimi-cu',
+        transport: 'stdio',
+        command: '/Applications/KimiCU.app/Contents/MacOS/kimi-cu',
+        args: ['mcp', '-s', 'user'],
+        requireApproval: true,
+        failOnStartupError: false,
+        reconnect: { enabled: false },
+      },
+    })
   })
 
   it('minimal mounts no shell tool row at all (its shell is the PTY stack)', () => {

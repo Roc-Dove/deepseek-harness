@@ -28,6 +28,8 @@ import type { JsonSchemaNode, JsonValue } from '@deepseek-ai/dsh-tools'
 export interface ToolBridgeOptions {
   /** Whether a registry conflict is contained or rejects this synchronization. */
   registrationFailure: 'contain' | 'throw'
+  /** Whether each registered definition owns a final approval requirement. */
+  requireApproval: boolean
   serverName: string
   toolCallTimeoutMs: number
 }
@@ -150,6 +152,7 @@ export async function syncTools(
         name: publicName,
         description: tool.description ?? '',
         parameters: tool.inputSchema,
+        requiresApproval: opts.requireApproval,
         output: createOutput(tool.name, supportedOutputSchema(tool.outputSchema)),
         execute: createExecutor(ctx, client, tool.name, tool.execution?.taskSupport === 'required', opts),
       })

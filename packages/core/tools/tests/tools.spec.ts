@@ -83,6 +83,15 @@ describe('ToolRuntime', () => {
     expect('timeoutMs' in (schema as object)).toBe(false)
   })
 
+  it('schemas() excludes definition-owned approval metadata', async () => {
+    const ctx = await setup()
+    ctx.tools.register({ ...echoTool, name: 'approval-owned', requiresApproval: true })
+
+    const schema = ctx.tools.schemas().find(candidate => candidate.name === 'approval-owned')
+    expect(schema).toBeDefined()
+    expect('requiresApproval' in (schema as object)).toBe(false)
+  })
+
   it('executes a tool and returns its content', async () => {
     const ctx = await setup()
     ctx.tools.register(echoTool)
@@ -756,6 +765,271 @@ describe('ToolRuntime', () => {
       expect(seen).toHaveLength(1)
       expect(seen[0]).toMatchObject({ agent, toolName: 'echo', callId: 'c1', reason: 'hook wants a human' })
       expect(seen[0]?.signal).toBe(controller.signal)
+    })
+
+    it('enforces a definition-owned approval after a reorderable listener returns allow', async () => {
+      const ctx = await approvalSetup()
+      const agent = fakeAgent()
+      const seen: ApprovalRequest[] = []
+      ctx.tools.register({
+        ...echoTool,
+        name: 'owner-approval',
+        requiresApproval: true,
+      })
+      ctx.on('approval/request', (request) => {
+        seen.push(request)
+        return Promise.resolve<ApprovalOutcome>('allowed-once')
+      })
+      // A reorderable listener may short-circuit the rest of the waterfall,
+      // but it cannot weaken policy owned by the resolved definition.
+      ctx.on('tools/pre-execute', async (): Promise<PreToolDecision> => ({ kind: 'allow' }))
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('owner-approval'),
+        name: 'owner-approval',
+        arguments: { text: 'approved' },
+        agent,
+      })
+
+      expect(result).toMatchObject({ isError: false, content: [{ type: 'text', text: 'approved' }] })
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject({
+        agent,
+        toolName: 'owner-approval',
+        callId: 'owner-approval',
+        reason: 'Allow tool "owner-approval" to run.',
+      })
+    })
+
+    it.each([
+      { label: 'an unknown kind', decision: { kind: 'accept' } },
+      { label: 'a deny without a reason', decision: { kind: 'deny' } },
+      { label: 'an ask with a non-string reason', decision: { kind: 'ask', reason: 42 } },
+      { label: 'a non-object value', decision: null },
+    ])('fails closed when pre-execute returns $label', async ({ decision }) => {
+      const ctx = await approvalSetup()
+      let bodyRan = false
+      let approvals = 0
+      ctx.tools.register({
+        ...echoTool,
+        name: 'malformed-owner-decision',
+        requiresApproval: true,
+        async execute() {
+          bodyRan = true
+          return 'unexpected'
+        },
+      })
+      ctx.on('approval/request', () => {
+        approvals += 1
+        return Promise.resolve<ApprovalOutcome>('allowed-once')
+      })
+      ctx.on('tools/pre-execute', async () => decision as unknown as PreToolDecision)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('malformed-owner-decision'),
+        name: 'malformed-owner-decision',
+        arguments: {},
+        agent: fakeAgent(),
+      })
+
+      expect(bodyRan).toBe(false)
+      expect(approvals).toBe(0)
+      expect(result).toMatchObject({
+        isError: true,
+        error: { message: expect.stringContaining('tools/pre-execute returned an invalid') as string },
+      })
+    })
+
+    it('dispatches the approved immutable definition and arguments despite mutation attempts', async () => {
+      const ctx = await approvalSetup()
+      let replacementRan = false
+      const mutableDefinition: ToolDefinition = {
+        ...echoTool,
+        name: 'immutable-approval',
+        requiresApproval: true,
+        output: { ...echoTool.output },
+      }
+      ctx.tools.register(mutableDefinition)
+      const registered = ctx.tools.get('immutable-approval')
+      if (registered === undefined) throw new Error('expected registered approval fixture')
+      let approvals = 0
+      ctx.on('approval/request', () => {
+        approvals += 1
+        return Promise.resolve<ApprovalOutcome>('allowed-once')
+      })
+      ctx.on('tools/pre-execute', async (exec): Promise<PreToolDecision> => {
+        expect(Reflect.set(exec, 'arguments', { text: 'mutated arguments' })).toBe(false)
+        expect(registered).toBe(mutableDefinition)
+        expect(Reflect.set(registered, 'execute', async () => {
+          replacementRan = true
+          return 'mutated body'
+        })).toBe(true)
+        expect(Reflect.set(registered.output, 'render', () => [{ type: 'text', text: 'mutated render' }])).toBe(true)
+        return { kind: 'allow' }
+      })
+      // Mutating the caller-owned definition after register() cannot change
+      // the registry-owned snapshot either.
+      expect(Reflect.set(mutableDefinition, 'requiresApproval', false)).toBe(true)
+      expect(Reflect.set(mutableDefinition, 'execute', async () => {
+        replacementRan = true
+        return 'caller mutation'
+      })).toBe(true)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('immutable-approval'),
+        name: 'immutable-approval',
+        arguments: { text: 'approved arguments' },
+        agent: fakeAgent(),
+      })
+
+      expect(approvals).toBe(1)
+      expect(replacementRan).toBe(false)
+      expect(result).toMatchObject({
+        isError: false,
+        value: 'approved arguments',
+        content: [{ type: 'text', text: 'approved arguments' }],
+      })
+    })
+
+    it('never dispatches a replacement definition installed after approval policy was captured', async () => {
+      const ctx = await approvalSetup()
+      let replacementRan = false
+      const disposeInitial = ctx.tools.register({
+        ...echoTool,
+        name: 'approval-swap',
+      })
+      ctx.on('tools/pre-execute', async (): Promise<PreToolDecision> => {
+        disposeInitial()
+        ctx.tools.register({
+          ...echoTool,
+          name: 'approval-swap',
+          requiresApproval: true,
+          async execute() {
+            replacementRan = true
+            return 'replacement'
+          },
+        })
+        return { kind: 'allow' }
+      })
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('approval-swap'),
+        name: 'approval-swap',
+        arguments: {},
+        agent: fakeAgent(),
+      })
+
+      expect(replacementRan).toBe(false)
+      expect(result).toMatchObject({
+        isError: true,
+        error: { info: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' } },
+      })
+    })
+
+    it('never dispatches either definition when replacement happens while approval is pending', async () => {
+      const ctx = await approvalSetup()
+      let initialRan = false
+      let replacementRan = false
+      const disposeInitial = ctx.tools.register({
+        ...echoTool,
+        name: 'approval-wait-swap',
+        requiresApproval: true,
+        async execute() {
+          initialRan = true
+          return 'initial'
+        },
+      })
+      let resolveApproval: ((outcome: ApprovalOutcome) => void) | undefined
+      let markApprovalPending: (() => void) | undefined
+      const approvalPending = new Promise<void>((resolve) => { markApprovalPending = resolve })
+      const approvalOutcome = new Promise<ApprovalOutcome>((resolve) => { resolveApproval = resolve })
+      ctx.on('approval/request', () => {
+        markApprovalPending?.()
+        return approvalOutcome
+      })
+
+      const execution = ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('approval-wait-swap'),
+        name: 'approval-wait-swap',
+        arguments: {},
+        agent: fakeAgent(),
+      })
+      await approvalPending
+      disposeInitial()
+      ctx.tools.register({
+        ...echoTool,
+        name: 'approval-wait-swap',
+        requiresApproval: true,
+        async execute() {
+          replacementRan = true
+          return 'replacement'
+        },
+      })
+      resolveApproval?.('allowed-once')
+
+      const result = await execution
+      expect(initialRan).toBe(false)
+      expect(replacementRan).toBe(false)
+      expect(result).toMatchObject({
+        isError: true,
+        error: { info: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' } },
+      })
+    })
+
+    it('does not retain an approval contract from a failed duplicate registration', async () => {
+      const ctx = await approvalSetup()
+      const disposeBlocker = ctx.tools.register({ ...echoTool, name: 'approval-retry' })
+      const candidate: ToolDefinition = { ...echoTool, name: 'approval-retry' }
+      expect(() => ctx.tools.register(candidate)).toThrow('already registered')
+      disposeBlocker()
+      expect(Reflect.set(candidate, 'requiresApproval', true)).toBe(true)
+      ctx.tools.register(candidate)
+      let approvals = 0
+      ctx.on('approval/request', () => {
+        approvals += 1
+        return Promise.resolve<ApprovalOutcome>('allowed-once')
+      })
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: CallId('approval-retry'),
+        name: 'approval-retry',
+        arguments: { text: 'approved after retry' },
+        agent: fakeAgent(),
+      })
+
+      expect(approvals).toBe(1)
+      expect(result).toMatchObject({
+        isError: false,
+        content: [{ type: 'text', text: 'approved after retry' }],
+      })
+    })
+
+    it('rejects an approval-policy mutation when re-registering the same definition object', async () => {
+      const ctx = await approvalSetup()
+      const candidate: ToolDefinition = { ...echoTool, name: 'approval-policy-mutation' }
+      const dispose = ctx.tools.register(candidate)
+      dispose()
+      expect(Reflect.set(candidate, 'requiresApproval', true)).toBe(true)
+
+      expect(() => ctx.tools.register(candidate)).toThrow('cannot change requiresApproval')
+    })
+
+    it('rejects a name mutation when re-registering the same definition object', async () => {
+      const ctx = await approvalSetup()
+      const candidate: ToolDefinition = { ...echoTool, name: 'name-mutation-before' }
+      const dispose = ctx.tools.register(candidate)
+      dispose()
+      expect(Reflect.set(candidate, 'name', 'name-mutation-after')).toBe(true)
+
+      expect(() => ctx.tools.register(candidate)).toThrow(
+        'cannot change its name from "name-mutation-before" to "name-mutation-after"',
+      )
     })
 
     it('denies with the user-rejection reason on rejected', async () => {
@@ -1955,16 +2229,14 @@ describe('ToolRuntime', () => {
     expect(cursor).toEqual({ type: 'string' })
   })
 
-  it('rejects schema projection when a raw registration is not lossless JSON', async () => {
+  it('rejects a raw registration whose schema cannot enter the immutable snapshot', async () => {
     const ctx = await setup()
-    ctx.tools.register({
+    expect(() => ctx.tools.register({
       ...echoTool,
       name: 'lossy-schema',
       parameters: { type: 'object', default: Number.NaN },
-    })
-
-    expect(() => ctx.tools.schemas())
-      .toThrow('tool "lossy-schema" parameters must be lossless JSON before schema projection')
+    }))
+      .toThrow('tool "lossy-schema" parameters must be losslessly JSON-serializable')
   })
 
   it('rejects a non-positive or non-finite registration timeout', async () => {

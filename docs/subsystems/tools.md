@@ -8,7 +8,7 @@ Source: [`packages/core/tools/src/index.ts`](../../packages/core/tools/src/index
 
 ## `ToolDefinition` — a registered tool
 
-A `ToolSchema` (the model-facing fields) plus a mandatory canonical output declaration, the `execute` function, host-only scheduler metadata, an optional final-content callback, and optional UI presenters. The registry holds these; the loop dispatches calls through them. The registry's `schemas()` builds the model-facing `ToolSchema[]` by an explicit allowlist — `output`/`execute`/`finalizeContent`/`timeoutMs`/`isConcurrencySafe`/`presentCall`/`presentResult` must never leak into a model request.
+A `ToolSchema` (the model-facing fields) plus a mandatory canonical output declaration, the `execute` function, host-only approval and scheduler metadata, an optional final-content callback, and optional UI presenters. The registry holds these; the loop dispatches calls through them. The registry's `schemas()` builds the model-facing `ToolSchema[]` by an explicit allowlist — `output`/`requiresApproval`/`execute`/`finalizeContent`/`timeoutMs`/`isConcurrencySafe`/`presentCall`/`presentResult` must never leak into a model request.
 
 ```ts type-equiv
 /** Tool-owned canonical output contract used after the body returns a JSON value. */
@@ -27,6 +27,15 @@ interface ToolOutputDefinition {
 interface ToolDefinition extends ToolSchema {
   /** Mandatory canonical output declaration. */
   readonly output: ToolOutputDefinition
+  /**
+   * Require one user approval before this definition may dispatch. The
+   * registry snapshots this owner policy when execution starts and applies it
+   * after the reorderable `tools/pre-execute` waterfall, upgrading only a
+   * final allow decision to ask. Listener ordering therefore cannot bypass
+   * the requirement; an existing deny or ask remains authoritative. This
+   * metadata is never sent to the model.
+   */
+  readonly requiresApproval?: boolean
   /**
    * Run one accepted call and return only its canonical lossless-JSON value.
    * Async work must observe or forward `exec.signal` and settle only after its
@@ -283,10 +292,11 @@ interface CodeDispatchLog {
 ```ts type-equiv
 /**
  * One pending tool call inside the registry pipeline. Parsed arguments cross
- * one lossless-JSON materialization boundary before policy and are deep-frozen;
- * call identity, the caller signal, and the registry-assigned {@link token} are
- * readonly. The registry freezes the complete object before `tools/result`
- * observers run.
+ * one lossless-JSON materialization boundary before policy and are deep-frozen.
+ * The live object is sealed at creation: identity and arguments are runtime
+ * non-writable, while only `signal` remains writable for the documented
+ * around-dispatch replacement. The registry freezes the complete object before
+ * `tools/result` observers run.
  */
 interface ToolExecution extends ToolExecutionInput {
   /** Root model-requested call, resolved for every root and nested execution. */
@@ -308,7 +318,7 @@ interface ToolDispatchExecution extends Omit<ToolExecution, 'signal'> {
 }
 ```
 
-`ToolExecutionToken` is an opaque runtime `Symbol` used only for identity comparison. Before policy, `execute()` materializes and freezes arguments, rejects non-JSON input, and assigns the token. Identity fields, the required caller signal, and the optional parent token remain readonly. A `ToolDispatchExecution` wrapper may replace but not remove the signal; the registry re-fuses the caller signal before invoking the body. Final observers receive the frozen execution identity.
+`ToolExecutionToken` is an opaque runtime `Symbol` used only for identity comparison. Before policy, `execute()` materializes and freezes arguments, rejects non-JSON input, and assigns the token. Identity fields, arguments, and the optional parent token are runtime non-writable; only the signal remains writable for around-dispatch replacement. The typed `ToolExecution` view keeps that signal readonly, while a `ToolDispatchExecution` wrapper may replace but not remove it; the registry re-fuses the caller signal before invoking the body. Final observers receive the frozen execution identity.
 
 A `ToolGuard` is scope-aware final pre-dispatch policy. Its return type deliberately has no allow result: `undefined` preserves the waterfall decision, while a returned reason can only reduce permission, so a later listener cannot undo it.
 
@@ -498,7 +508,11 @@ presentAs(mode: ToolPresentationMode): () => void
 /**
  * Register globally or in the calling agent scope. Scoped tools shadow
  * globals; duplicates within one layer and the reserved `run_code` name fail.
- * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
+ * `get()` preserves the supplied object identity, while execution and wire
+ * schema use the immutable contract captured at its first successful
+ * registration. Failed insertions retain no provisional contract, and a
+ * later registration of the same object cannot change `requiresApproval`.
+ * @param definition - tool schema, execution, and optional approval/finalization/presentation callbacks.
  * @returns the exact disposer that unregisters the tool.
  */
 register(definition: ToolDefinition): () => void
@@ -531,7 +545,7 @@ guard(guard: ToolGuard): () => void
  * actually executed.
  * @param name - the tool name as registered.
  * @param scope - the viewing scope (the agent); omitted = the global view.
- * @returns the definition the scope resolves, or undefined when none is visible.
+ * @returns the original registration object the scope resolves, or undefined when none is visible.
  */
 get(name: string, scope?: ScopeKey): ToolDefinition | undefined
 
@@ -571,7 +585,7 @@ async execute(exec: ToolExecutionInput): Promise<ToolExecutionResult>
 
 Types: [ScopeKey](scope.md)
 
-Source: [`packages/core/tools/src/index.ts:787`](../../packages/core/tools/src/index.ts)
+Source: [`packages/core/tools/src/index.ts:837`](../../packages/core/tools/src/index.ts)
 
 <a id="tools-events"></a>
 
