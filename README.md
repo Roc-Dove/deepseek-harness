@@ -1,69 +1,85 @@
-# DeepSeek Harness
+<p align="center">
+  <img src="apps/desktop/assets/icon.png" alt="DeepSeek Harness Desktop icon" width="96" height="96">
+</p>
+
+# DeepSeek Harness Desktop
 
 English | [中文](README.zh.md)
 
-DeepSeek Harness (`dsh`) is an open-source agent harness originally developed by [DeepSeek AI](https://deepseek.com).
+<p align="center">Conversations, tool activity, session history, and images in one desktop window.</p>
 
-This repository is a community fork. It keeps the upstream plugin architecture and adds self-contained Electron desktop packages, archived-session recovery, image-aware model and MCP flows, and an optional Vision Bridge.
+<p align="center"><a href="apps/desktop/README.md">Desktop guide</a> · <a href="https://github.com/Roc-Dove/deepseek-harness/actions/workflows/desktop-release.yml">Preview builds</a> · <a href="docs/development.md">Develop from source</a></p>
 
-It uses an architecture where **everything is a plugin**, and is powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper).
+This community fork packages DeepSeek Harness as an installable desktop application. A packaged build includes Electron, the Harness backend, the Web UI, and the production dependencies they need. The application itself does not depend on a separate Node.js or pnpm installation, or on a source checkout.
 
-## Community fork highlights
+<p align="center">
+  <img src="assets/readme/desktop-overview.png" alt="DeepSeek Harness workspace showing the session list, a conversation, tool activity, and model controls" width="1000">
+</p>
 
-- The packaging pipeline targets macOS Apple Silicon, macOS Intel, and Windows x64. Each packaged runtime includes Electron, the built backend, its production dependencies, and the Web frontend, without depending on a separately installed Node.js, pnpm, or source checkout.
-- Archived sessions can be restored from Settings, with cross-tab ordering that prevents an older response from reverting a newer archive state.
-- DeepSeek and text-only model routes retain controlled image descriptions, the optional Vision Bridge provides `describe_image`, and MCP image results persist as validated attachments.
+<p align="center"><sub>The desktop workspace keeps the session list, agent conversation, tool steps, and model controls together.</sub></p>
 
-## Desktop preview
+**Preview status:** There is no signed public installer yet. Current CI packages are unsigned evaluation builds, so macOS and Windows may warn about them or refuse to open them. The project is also in developer preview and may make compatibility-breaking changes.
 
-The [desktop distribution workflow](https://github.com/Roc-Dove/deepseek-harness/actions/workflows/desktop-release.yml) builds each native package and smoke-tests its bundled backend with the packaged Electron executable. Successful pull-request runs provide unsigned evaluation artifacts; macOS and Windows may warn about or block them. Public downloads require platform code signing, and macOS downloads also require notarization. See the [desktop guide](apps/desktop/README.md) for installation, configuration, build, and release details.
+## How the installed app starts
 
-## Developer preview
+Opening an installed build starts its bundled backend on an ephemeral loopback address and loads the interface in one Electron window. The application creates its own data directory for settings, sessions, attachments, and its default workspace. It does not copy credentials, sessions, patches, or paths from the machine that built the installer.
 
-DeepSeek Harness is currently in _developer preview_ and is iterating rapidly. **THERE WILL BE COMPATIBILITY-BREAKING CHANGES.**
+The source development entry remains available for contributors, but installed builds do not run through a repository checkout and do not load local source patches.
 
-## Run
+## Return to archived work
 
-### Run from `npm`
+Archiving removes a session from the active list without deleting its history. Open Settings to restore it, or restore and open it in one action. Archive changes are ordered across connected tabs so an older response cannot replace a newer state.
 
-Install `Node.js`, then run:
+<p align="center">
+  <img src="assets/readme/archived-sessions.png" alt="Archived sessions settings with a saved session and the Unarchive action" width="1000">
+</p>
 
-```sh
-npx @deepseek-ai/dsh web
-```
+<p align="center"><sub>Archived sessions remain available from Settings.</sub></p>
 
-The command starts the Web UI, served at `http://127.0.0.1:3080` by default. See [Web UI guide](docs/user/guide/index.md).
+## Keep images in the conversation
 
-### Run from source
+Images remain visible in durable session history. A route that supports image input can receive them directly. For text-only routes, the optional Vision Bridge can save a controlled description beside each image before the request continues. Vision Bridge is disabled by default and requires an image-capable model route.
 
-To run from a repository checkout:
+MCP tools can also return screenshots and generated images. The application validates accepted image bytes, stores them as attachments, and preserves their order in the tool result. A route that cannot receive the image gets explicit text instead of an unsafe attachment reference.
+
+## What runs when you open it
+
+<p align="center">
+  <img src="assets/readme/runtime.en.svg" alt="Electron desktop window connected to the bundled loopback backend, local application data, model routes, and MCP servers" width="1000">
+</p>
+
+The desktop window and backend ship together. Model providers and MCP servers remain connections that the user chooses and configures. See the [desktop guide](apps/desktop/README.md) for installed data locations, startup behavior, navigation policy, and release verification.
+
+<a id="run"></a>
+
+## Get a preview build
+
+The desktop workflow builds and smoke-tests native packages on each target platform:
+
+| Platform | Evaluation package |
+|---|---|
+| macOS Apple Silicon | `macos-arm64` DMG and ZIP |
+| macOS Intel | `macos-x64` DMG and ZIP |
+| Windows x64 | `windows-x64` installer and ZIP |
+
+Successful pull-request runs attach unsigned artifacts for evaluation. They expire according to GitHub Actions retention. Public downloads belong on the Releases page only after macOS signing and notarization, and Windows code signing, are configured.
+
+<a id="run-from-source"></a>
+
+## Develop from source
 
 ```sh
 git clone https://github.com/Roc-Dove/deepseek-harness.git
 cd deepseek-harness
 pnpm install
 pnpm run build
-pnpm dsh web
+pnpm run desktop:dev
 ```
 
-## Upstream community and support
+Source mode keeps local patch overlays and live-watch behavior for development. Read the [desktop guide](apps/desktop/README.md), [development guide](docs/development.md), and [architecture documentation](docs/architecture.md) before changing the runtime.
 
-- Use the upstream [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions) for the base Harness project.
-- Add the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic to your plugin repository for discoverability.
-- Join <a href="https://discord.gg/Ycq5dCaS4">DeepSeek Harness Discord community</a>.
+## Project and license
 
-## Contributing
+This repository is based on the open-source DeepSeek Harness originally developed by [DeepSeek AI](https://deepseek.com). Upstream project discussions remain at [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness/discussions).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Development
-
-Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
-
-For agents, follow [AGENTS.md](AGENTS.md).
-
-## License
-
-[MIT](LICENSE)
-
-Third-party dependencies and their licenses are disclosed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). The code is available under the [MIT License](LICENSE), and dependency licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

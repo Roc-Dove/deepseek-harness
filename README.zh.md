@@ -1,86 +1,85 @@
-# DeepSeek Harness
+<p align="center">
+  <img src="apps/desktop/assets/icon.png" alt="DeepSeek Harness Desktop 图标" width="96" height="96">
+</p>
+
+# DeepSeek Harness Desktop
 
 [English](README.md) | 中文
 
-DeepSeek Harness（`dsh`）是最初由 [DeepSeek AI](https://deepseek.com) 开发的开源 agent harness（智能体框架）。
+<p align="center">把对话、工具执行、会话历史与图片集中在一个桌面窗口中。</p>
 
-本仓库是社区 fork，在保留上游插件架构的基础上，增加了自包含 Electron 桌面安装包、归档会话恢复、支持图片的模型与 MCP 流程，以及可选的 Vision Bridge。
+<p align="center"><a href="apps/desktop/README.md">桌面指南</a> · <a href="https://github.com/Roc-Dove/deepseek-harness/actions/workflows/desktop-release.yml">预览构建</a> · <a href="docs/development.md">从源码开发</a></p>
 
-它采用**一切皆插件**的架构，并由 [Cordis](https://github.com/cordiverse/cordis) 驱动，其设计参见论文 [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper)。
+这个社区 fork 把 DeepSeek Harness 打包为可安装的桌面应用。打包产物内含 Electron、Harness 后端、Web UI 及其生产依赖。应用本身不依赖另行安装的 Node.js 或 pnpm，也不依赖源码仓库。
 
-## 社区 fork 功能
+<p align="center">
+  <img src="assets/readme/desktop-overview.png" alt="DeepSeek Harness 工作区，显示会话列表、对话、工具执行与模型控制" width="1000">
+</p>
 
-- 打包流水线支持 macOS Apple Silicon、macOS Intel 与 Windows x64。每个平台的打包运行时均内含 Electron、构建完成的后端、生产依赖与 Web 前端，不依赖另行安装的 Node.js、pnpm 或源码仓库。
-- 可以从设置中恢复归档会话；跨标签页排序会阻止较旧响应回滚较新的归档状态。
-- DeepSeek 与纯文本模型路由会保留受控图片描述；可选 Vision Bridge 提供 `describe_image`；MCP 图片结果会作为经过验证的附件持久化。
+<p align="center"><sub>桌面工作区把会话列表、智能体对话、工具步骤与模型控制放在同一个窗口中。</sub></p>
 
-## 桌面预览版
+**预览状态：** 当前还没有经过签名的公开安装包。CI 产物是未签名的评估版本，macOS 与 Windows 可能提示风险或拒绝打开。项目仍处于开发者预览阶段，后续可能出现破坏兼容性的变更。
 
-[桌面发行 workflow](https://github.com/Roc-Dove/deepseek-harness/actions/workflows/desktop-release.yml) 会在各原生平台构建打包产物，并使用其中的 Electron 可执行文件对内置后端做 smoke test。成功的拉取请求运行会提供未签名评估产物，macOS 与 Windows 可能警告或阻止其运行。公开下载件必须完成平台代码签名，macOS 下载件还必须通过公证。安装、配置、构建与发布说明见[桌面指南](apps/desktop/README.md)。
+## 安装版如何启动
 
-## 开发者预览
+打开安装版后，应用会在本机临时回环地址启动内置后端，并在一个 Electron 窗口中载入界面。应用会为设置、会话、附件与默认工作区创建自己的数据目录。安装包不会复制构建电脑上的凭据、会话、补丁或路径。
 
-DeepSeek Harness 目前处于 _开发者预览_ 阶段，正在快速迭代。**未来将出现破坏兼容性的变更。**
+贡献者仍可使用源码开发入口，但安装版不会通过源码仓库运行，也不会加载本机源码补丁。
 
-## 运行
+## 恢复归档会话
 
-### 通过 `npm` 运行
+归档只会把会话移出当前列表，不会删除历史记录。你可以在设置中恢复会话，也可以恢复后直接打开。归档变更会在已连接的标签页之间有序同步，较旧响应不会覆盖较新的状态。
 
-安装 `Node.js`，然后运行：
+<p align="center">
+  <img src="assets/readme/archived-sessions.png" alt="已归档会话设置，显示已保存会话和取消归档操作" width="1000">
+</p>
 
-```sh
-npx @deepseek-ai/dsh web
-```
+<p align="center"><sub>归档会话仍可从设置中恢复。</sub></p>
 
-该命令会启动 Web UI，默认地址为 `http://127.0.0.1:3080`。详见 [Web UI 指南](docs/user/guide/index.md)。
+## 让图片留在会话里
 
-### 从源码运行
+图片会保留在持久会话历史中。支持图片输入的模型路由可以直接接收图片。对于纯文本路由，可选的 Vision Bridge 会在继续请求前为每张图片生成受控描述，并把描述保存在图片旁边。Vision Bridge 默认关闭，启用前需要配置支持图片输入的模型路由。
 
-如需从仓库源码运行：
+MCP 工具也可以返回截图或生成图片。应用会校验允许接收的图片内容、保存为附件，并保留它们在工具结果中的顺序。无法接收图片的路由会获得明确文本，而不是不安全的附件引用。
+
+## 打开应用后会运行什么
+
+<p align="center">
+  <img src="assets/readme/runtime.zh.svg" alt="Electron 桌面窗口连接内置回环后端、本机应用数据、模型路由与 MCP 服务器" width="1000">
+</p>
+
+桌面窗口与后端一起打包。模型服务商与 MCP 服务器仍由用户自行选择和配置。安装数据位置、启动行为、导航策略与发行验证详见[桌面指南](apps/desktop/README.md)。
+
+<a id="run"></a>
+
+## 获取预览构建
+
+桌面 workflow 会在每个目标平台上构建原生产物并执行 smoke test：
+
+| 平台 | 评估产物 |
+|---|---|
+| macOS Apple Silicon | `macos-arm64` DMG 与 ZIP |
+| macOS Intel | `macos-x64` DMG 与 ZIP |
+| Windows x64 | `windows-x64` 安装程序与 ZIP |
+
+成功的拉取请求运行会附带未签名评估产物，这些文件会按 GitHub Actions 的保留期限过期。只有完成 macOS 签名与公证，以及 Windows 代码签名后，才能在 Releases 页面提供公开下载。
+
+<a id="run-from-source"></a>
+
+## 从源码开发
 
 ```sh
 git clone https://github.com/Roc-Dove/deepseek-harness.git
 cd deepseek-harness
 pnpm install
 pnpm run build
-pnpm dsh web
+pnpm run desktop:dev
 ```
 
-## 上游社区与支持
+源码模式保留本机补丁覆盖与实时监听能力。修改运行时前，请先阅读[桌面指南](apps/desktop/README.md)、[开发指南](docs/development.md)与[架构文档](docs/architecture.md)。
 
-- 与基础 Harness 项目有关的讨论，请使用上游 [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions)。
-- 为你的插件仓库添加 [`dsh-plugin`](https://github.com/topics/dsh-plugin) 话题，便于被发现。
-- 欢迎加入 DeepSeek Harness 企微群：扫码添加企微小助手并填写入群问卷，完成后小助手会邀请你入群。
+## 项目与许可证
 
-<table>
-  <thead>
-    <tr>
-      <th align="center">企微小助手</th>
-      <th align="center">入群问卷</th>
-      <th align="center">微信公众号</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td align="center"><img src="assets/community-wecom-assistant.png" alt="DeepSeek Harness 企微小助手二维码" width="180" height="180"></td>
-      <td align="center"><a href="https://trtgsjkv6r.feishu.cn/share/base/form/shrcnIt5twSVdLGD52KJBckGCgg"><img src="assets/community-wecom-survey.png" alt="DeepSeek Harness 入群问卷二维码" width="180" height="180"></a></td>
-      <td align="center"><img src="assets/community-wechat-official-account.png" alt="DeepSeek Harness 团队微信公众号二维码" width="180" height="180"></td>
-    </tr>
-  </tbody>
-</table>
+本仓库基于由 [DeepSeek AI](https://deepseek.com) 最初开发的开源 DeepSeek Harness。上游项目讨论仍位于 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness/discussions)。
 
-## 参与贡献
-
-参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 开发
-
-请先阅读[开发指南](docs/development.md)与[架构文档](docs/architecture.md)。
-
-面向 agent：请遵循 [AGENTS.md](AGENTS.md)。
-
-## 许可证
-
-[MIT](LICENSE)
-
-第三方依赖及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+参与贡献请遵循 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。代码采用 [MIT 许可证](LICENSE)，依赖许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
