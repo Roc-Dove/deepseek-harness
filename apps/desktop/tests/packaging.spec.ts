@@ -33,6 +33,11 @@ interface PackagingModule {
   createShellManifest: (source: Record<string, unknown>) => Record<string, unknown>
   deploymentArguments: (backendStage: string) => string[]
   ensureArtifactRoot: () => Promise<void>
+  pnpmCommandSpec: (options?: {
+    environment?: Record<string, string | undefined>
+    nodeExecPath?: string
+    platform?: NodeJS.Platform
+  }) => { command: string; prefixArgs: string[] }
   promoteBackendPackage: (directory: string) => Promise<void>
   resolveBuildRequest: (target: string, platform?: NodeJS.Platform, arch?: string) => BuildRequest
   sanitizeGeneratedSourcePaths: (
@@ -65,6 +70,7 @@ const {
   createShellManifest,
   deploymentArguments,
   ensureArtifactRoot,
+  pnpmCommandSpec,
   promoteBackendPackage,
   resolveBuildRequest,
   sanitizeGeneratedSourcePaths,
@@ -164,6 +170,66 @@ describe('desktop packaging inputs', () => {
       '--config.strict-dep-builds=false',
       '/private/stage/backend',
     ])
+  })
+
+  it('keeps the non-Windows pnpm command unchanged', () => {
+    expect(pnpmCommandSpec({
+      environment: { npm_execpath: '/ignored/pnpm.cjs' },
+      nodeExecPath: '/ignored/node',
+      platform: 'darwin',
+    })).toEqual({ command: 'pnpm', prefixArgs: [] })
+  })
+
+  it.each(['pnpm.cjs', 'pnpm.js', 'pnpm.mjs'])('runs the Windows %s CLI through Node with discrete deployment argv', (filename) => {
+    const npmExecPath = `C:\\Program Files\\CI & package\\node_modules\\pnpm\\bin\\${filename}`
+    const nodeExecPath = 'C:\\Program Files\\nodejs\\node.exe'
+    const backendStage = 'C:\\checkout & stage\\backend'
+    const spec = pnpmCommandSpec({
+      environment: { npm_execpath: npmExecPath },
+      nodeExecPath,
+      platform: 'win32',
+    })
+
+    expect(spec).toEqual({ command: nodeExecPath, prefixArgs: [npmExecPath] })
+    expect([...spec.prefixArgs, ...deploymentArguments(backendStage)]).toEqual([
+      npmExecPath,
+      '--trust-lockfile',
+      '--filter',
+      '@deepseek-ai/dsh-desktop',
+      'deploy',
+      '--prod',
+      '--config.node-linker=hoisted',
+      '--config.inject-workspace-packages=true',
+      '--config.strict-dep-builds=false',
+      backendStage,
+    ])
+  })
+
+  it('accepts an absolute Windows UNC path for the pnpm CLI', () => {
+    const npmExecPath = '\\\\build-server\\pnpm\\bin\\pnpm.mjs'
+    expect(pnpmCommandSpec({
+      environment: { npm_execpath: npmExecPath },
+      nodeExecPath: 'C:\\Program Files\\nodejs\\node.exe',
+      platform: 'win32',
+    })).toEqual({
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      prefixArgs: [npmExecPath],
+    })
+  })
+
+  it.each([
+    [{}, /requires npm_execpath/],
+    [{ npm_execpath: '' }, /requires npm_execpath/],
+    [{ npm_execpath: 'node_modules\\pnpm\\bin\\pnpm.cjs' }, /absolute pnpm\.cjs, pnpm\.js, or pnpm\.mjs path/],
+    [{ npm_execpath: 'C:relative\\pnpm.mjs' }, /absolute pnpm\.cjs, pnpm\.js, or pnpm\.mjs path/],
+    [{ npm_execpath: 'C:\\tools\\pnpm.cmd' }, /absolute pnpm\.cjs, pnpm\.js, or pnpm\.mjs path/],
+    [{ npm_execpath: 'C:\\tools\\npm.cjs' }, /absolute pnpm\.cjs, pnpm\.js, or pnpm\.mjs path/],
+  ])('fails closed for an invalid Windows pnpm environment', (environment, message) => {
+    expect(() => pnpmCommandSpec({
+      environment,
+      nodeExecPath: 'C:\\Program Files\\nodejs\\node.exe',
+      platform: 'win32',
+    })).toThrow(message)
   })
 
   it('promotes the deployed CLI package over the private closure root', async () => {

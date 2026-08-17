@@ -19,7 +19,7 @@ const {
   unlink,
   writeFile,
 } = require('node:fs/promises')
-const { dirname, isAbsolute, join, relative, resolve, sep } = require('node:path')
+const { dirname, isAbsolute, join, relative, resolve, sep, win32 } = require('node:path')
 const { homedir } = require('node:os')
 const { parseArgs } = require('node:util')
 
@@ -228,8 +228,23 @@ function deploymentArguments(backendStage) {
   ]
 }
 
-function pnpmBin(platform = process.platform) {
-  return platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+function pnpmCommandSpec({
+  environment = process.env,
+  nodeExecPath = process.execPath,
+  platform = process.platform,
+} = {}) {
+  if (platform !== 'win32') return { command: 'pnpm', prefixArgs: [] }
+  const npmExecPath = environment.npm_execpath
+  if (typeof npmExecPath !== 'string' || npmExecPath.length === 0) {
+    throw new Error('desktop-package: Windows packaging requires npm_execpath from a pnpm package script.')
+  }
+  const filename = win32.basename(npmExecPath).toLowerCase()
+  if (!win32.isAbsolute(npmExecPath) || !['pnpm.cjs', 'pnpm.js', 'pnpm.mjs'].includes(filename)) {
+    throw new Error(
+      `desktop-package: Windows packaging requires npm_execpath to be an absolute pnpm.cjs, pnpm.js, or pnpm.mjs path; got ${JSON.stringify(npmExecPath)}.`,
+    )
+  }
+  return { command: nodeExecPath, prefixArgs: [npmExecPath] }
 }
 
 function formatCommand(command, args) {
@@ -243,6 +258,7 @@ async function runCommand(label, command, args, cwd = REPOSITORY_ROOT) {
     const child = spawn(command, args, {
       cwd,
       env: { ...process.env, CI: 'true' },
+      shell: false,
       stdio: 'inherit',
     })
     let settled = false
@@ -270,6 +286,7 @@ async function captureCommand(label, command, args, cwd = REPOSITORY_ROOT) {
     const child = spawn(command, args, {
       cwd,
       env: { ...process.env, CI: 'true' },
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const stdout = []
@@ -991,7 +1008,7 @@ module.exports = {
   deploymentArguments,
   ensureArtifactRoot,
   parseBuildCli,
-  pnpmBin,
+  pnpmCommandSpec,
   prepareBackend,
   promoteBackendPackage,
   removeTemporaryDirectory,

@@ -13,7 +13,7 @@ const {
   createTemporaryStage,
   deploymentArguments,
   parseBuildCli,
-  pnpmBin,
+  pnpmCommandSpec,
   prepareBackend,
   removeTemporaryDirectory,
   resolveSourceState,
@@ -94,10 +94,11 @@ async function main() {
   try {
     const shellManifest = await createShellStage(shellStage)
     await createLegalStage(legalStage)
+    const pnpm = pnpmCommandSpec()
     await runCommand(
       'deploy production backend',
-      pnpmBin(),
-      deploymentArguments(backendStage),
+      pnpm.command,
+      [...pnpm.prefixArgs, ...deploymentArguments(backendStage)],
       REPOSITORY_ROOT,
     )
     await prepareBackend(backendStage, request)
