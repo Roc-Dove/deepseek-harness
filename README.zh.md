@@ -32,6 +32,12 @@
 
 未安装 KimiCU 时，这个预设仍然可见，标准模式工具也可以继续使用，但不会注册电脑操作工具。安装 KimiCU 或修改权限后需要重启 Harness。在交互式审批策略下，经已注册 KimiCU 工具发起的调用需要用户在 Harness 中明确批准。这项提示不是围绕 KimiCU 或标准模式 Shell 的操作系统沙箱。默认 DeepSeek 路由能使用辅助功能文本，但不能直接理解返回的截图；视觉理解需要支持图片输入的模型路由。设置、数据流、权限与平台细节详见[桌面指南](apps/desktop/README.md)。
 
+<p align="center">
+  <img src="assets/readme/computer-use.jpg" alt="DeepSeek Harness 预设菜单，显示电脑操作模式及其 KimiCU 使用条件" width="1000">
+</p>
+
+<p align="center"><sub>电脑操作模式随预设选择器提供，KimiCU 本体仍需另行安装。</sub></p>
+
 ## 恢复归档会话
 
 归档只会把会话移出当前列表，不会删除历史记录。你可以在设置中恢复会话，也可以恢复后直接打开。归档变更会在已连接的标签页之间有序同步，较旧响应不会覆盖较新的状态。
