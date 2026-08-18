@@ -26,7 +26,7 @@ Options and the current default both come from one `agentPreset.list` call. The 
 
 A locally authored preset is exactly as privileged as the plugins it names, so the list marks `user` rows rather than presenting every preset as shipped and vetted.
 
-Preset files publish one unlocalized `name` and `description`, which Web uses for every `user` row and unknown `system` row. For the four shipped ids (`standard`, `code`, `minimal`, and `cordis`), Web resolves both fields from its active locale only when the roster marks the row `system`; an identically named `user` preset keeps its file metadata.
+Preset files publish one unlocalized `name` and `description`, which Web uses for every `user` row and unknown `system` row. For the five shipped ids (`standard`, `code`, `minimal`, `cordis`, and `computer-use`), Web resolves both fields from its active locale only when the roster marks the row `system`; an identically named `user` preset keeps its file metadata. The `computer-use` copy names its separately installed KimiCU requirement and the verified KimiCU 0.5.8 boundary (Apple silicon and macOS 14 or later) rather than presenting the external application as bundled or generally available on every macOS target.
 
 The row re-reads on `settings/changed` for its own namespace and on `connection/reset`: the roster is a live directory and the default is a settings field, so an external edit or a reconnect can both move it.
 
@@ -69,3 +69,4 @@ No direct invalidation. Changing the default never touches a running session's p
 - **A preset without metadata is listed by id** — display text is optional, and a copy given no name deliberately falls back to its directory name rather than presenting itself identically to its source.
 - **A revealed path is display text, not a link** — where the host has no desktop opener the row shows the directory to copy by hand; the browser cannot open a host filesystem location itself.
 - **Composition edits are invisible to the page** — the files are edited outside the browser and nothing on the wire announces a file change, so the roster re-reads on its own actions, `settings/changed`, and `connection/reset`, not on every disk edit.
+- **Duplicating a preset does not rewrite external namespace identities** — a copied `computer-use` composition retains `serverName: kimi-cu`; edit the copy to a unique server name before running it concurrently with the shipped preset, because one Host rejects duplicate live MCP namespaces.

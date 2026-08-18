@@ -4,8 +4,11 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import ToolRuntime, { type PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type { Config } from '@deepseek-ai/dsh-mcp-client'
 
 // ---- Mock MCP SDK ----
@@ -74,6 +77,12 @@ function sleep(ms: number): Promise<void> {
   return gate.promise
 }
 
+function fakeAgent(): Agent {
+  return {
+    session: { events: [{ type: 'turn/start' }], append: () => ({}) },
+  } as unknown as Agent
+}
+
 const stdioConfig: Config = {
   transport: 'stdio',
   serverName: 'srv',
@@ -123,6 +132,13 @@ describe('mcp-client plugin module exports', () => {
       command: 'echo',
     } as never)
     expect(resolved.serverName).toBe('github-prod_1')
+    expect(resolved.requireApproval).toBe(false)
+    expect(ConfigSchema({
+      transport: 'stdio',
+      serverName: 'github-prod_1',
+      command: 'echo',
+      requireApproval: true,
+    } as never).requireApproval).toBe(true)
   })
 
   it('Config schema materializes reconnect defaults and merges partial overrides', () => {
@@ -179,6 +195,108 @@ describe('apply (plugin lifecycle)', () => {
     expect(mockSetNotificationHandler).toHaveBeenCalled()
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
     expect(ctx.tools.get('remote')).toBeUndefined()
+  })
+
+  it('requires approval before dispatching a configured MCP tool', async () => {
+    await apply(ctx, { ...stdioConfig, requireApproval: true })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('mcp-approval'),
+      name: 'mcp__srv__remote',
+      arguments: {},
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{
+        type: 'text',
+        text: 'Error: Allow tool "mcp__srv__remote" to run.',
+      }],
+    })
+    expect(mockCallTool).not.toHaveBeenCalled()
+  })
+
+  it('dispatches only after allowed-once even when a reorderable listener returns allow', async () => {
+    await ctx.plugin(ApprovalService)
+    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('allowed-once'))
+    ctx.on('tools/pre-execute', async (): Promise<PreToolDecision> => ({ kind: 'allow' }))
+    await apply(ctx, { ...stdioConfig, requireApproval: true })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('mcp-approval-allowed'),
+      name: 'mcp__srv__remote',
+      arguments: {},
+      agent: fakeAgent(),
+    })
+
+    expect(result).toMatchObject({ isError: false })
+    expect(mockCallTool).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not dispatch when the user rejects definition-owned MCP approval', async () => {
+    await ctx.plugin(ApprovalService)
+    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('rejected'))
+    await apply(ctx, { ...stdioConfig, requireApproval: true })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('mcp-approval-rejected'),
+      name: 'mcp__srv__remote',
+      arguments: {},
+      agent: fakeAgent(),
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: 'Error: the user rejected tool "mcp__srv__remote"' }],
+    })
+    expect(mockCallTool).not.toHaveBeenCalled()
+  })
+
+  it('leaves unrelated tools outside the configured MCP approval gate', async () => {
+    await apply(ctx, { ...stdioConfig, requireApproval: true })
+    ctx.tools.register({
+      name: 'local',
+      description: 'Local fixture',
+      parameters: { type: 'object' },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value as string }],
+      },
+      execute: async () => 'local-ok',
+    })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('local-with-mcp-approval'),
+      name: 'local',
+      arguments: {},
+    })
+
+    expect(result).toMatchObject({ isError: false, content: [{ type: 'text', text: 'local-ok' }] })
+  })
+
+  it('preserves a downstream denial instead of replacing it with an approval request', async () => {
+    await apply(ctx, { ...stdioConfig, requireApproval: true })
+    ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
+      if (exec.name === 'mcp__srv__remote') return { kind: 'deny', reason: 'blocked downstream' }
+      return next()
+    })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('mcp-downstream-deny'),
+      name: 'mcp__srv__remote',
+      arguments: {},
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: 'Error: blocked downstream' }],
+    })
+    expect(mockCallTool).not.toHaveBeenCalled()
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {

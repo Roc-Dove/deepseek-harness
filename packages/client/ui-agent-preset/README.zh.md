@@ -26,7 +26,7 @@ chip 以部署默认值打开，其选择是**暂存**的——该界面先于�
 
 本地创作的 preset 的权限恰好等于它所引用的插件，因此列表会标注 `user` 行，而不是把每个 preset 都呈现为随附且已审核的。
 
-preset 文件提供一套未国际化的 `name` 与 `description`，Web 将其用于所有 `user` 行和未知的 `system` 行。对于四个随附 id（`standard`、`code`、`minimal` 与 `cordis`），只有名单将该行标记为 `system` 时，Web 才会从当前 locale 解析这两个字段；同名的 `user` preset 仍使用其文件元数据。
+preset 文件提供一套未国际化的 `name` 与 `description`，Web 将其用于所有 `user` 行和未知的 `system` 行。对于五个随附 id（`standard`、`code`、`minimal`、`cordis` 与 `computer-use`），只有名单将该行标记为 `system` 时，Web 才会从当前 locale 解析这两个字段；同名的 `user` preset 仍使用其文件元数据。`computer-use` 文案会说明需要另行安装 KimiCU，以及经过验证的 KimiCU 0.5.8 边界（Apple 芯片与 macOS 14 或更高版本），不会把这个外部应用说成安装包内置内容或假称它普遍支持所有 macOS 目标。
 
 本行在自身命名空间的 `settings/changed` 以及 `connection/reset` 时重新读取：名单是一个活动目录，默认值是一项设置，外部编辑与重新连接都可能改变它。
 
@@ -69,3 +69,4 @@ Indirectly, through the preset a later session is composed from; [`dsh-agent-pre
 - **没有元数据的 preset 按 id 列出** —— 展示文本是可选的，未取名的副本刻意回退到目录名，而不是与其来源呈现得一模一样。
 - **展示的路径是文本，不是链接** —— 宿主没有桌面打开器时，卡片显示目录供手工复制；浏览器自身无法打开宿主文件系统上的位置。
 - **组装编辑对页面不可见** —— 文件在浏览器之外编辑，传输层不广播文件变动，因此名单只在自身操作、`settings/changed` 与 `connection/reset` 时重读，而非每次磁盘编辑。
+- **复制 preset 不会改写外部 namespace 身份** —— `computer-use` 副本会保留 `serverName: kimi-cu`；如果要让它与随附预设并发运行，必须先把副本改成唯一服务器名称，因为同一个 Host 会拒绝重复的存活 MCP namespace。

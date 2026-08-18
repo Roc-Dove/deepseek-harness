@@ -19,6 +19,10 @@ const ORDER_SECTIONS = ['dependencies', 'optionalDependencies'] as const
 
 /** The workspace root manifest, which is never a release member. */
 const WORKSPACE_ROOT_PACKAGE = '@deepseek-ai/dsh-root'
+const CLI_REQUIRED_PRESET_FILES = [
+  'package/config/agent-presets/computer-use/agent.cordis.yml',
+  'package/config/agent-presets/computer-use/preset.yml',
+] as const
 
 /** One publishable package of a release family. */
 export interface ReleaseMember {
@@ -244,6 +248,12 @@ class DshFamily extends ReleaseFamily {
    */
   validatePayload(member: ReleaseMember, files: readonly string[]): void {
     validateTarballPayload(files, member.name)
+    if (member.name !== '@deepseek-ai/dsh') return
+    for (const required of CLI_REQUIRED_PRESET_FILES) {
+      if (!files.includes(required)) {
+        throw new Error(`${member.name} tarball is missing shipped computer-use preset file ${required}`)
+      }
+    }
   }
 
   readonly installedEntry = { packageName: '@deepseek-ai/dsh', binPath: 'lib/bin.js' }

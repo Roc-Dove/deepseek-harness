@@ -8,7 +8,7 @@
 
 ## `ToolDefinition` — 一个已注册的工具
 
-由一个 `ToolSchema`（面向模型的字段）、必需的规范输出声明、`execute` 函数、仅供宿主使用的调度器元数据、可选的最终内容回调和可选 UI 展示函数组成。注册表持有这些定义，循环通过它们分派调用。注册表的 `schemas()` 通过显式允许列表构建面向模型的 `ToolSchema[]`；`output`/`execute`/`finalizeContent`/`timeoutMs`/`isConcurrencySafe`/`presentCall`/`presentResult` 绝不能泄漏到模型请求中。
+由一个 `ToolSchema`（面向模型的字段）、必需的规范输出声明、`execute` 函数、仅供宿主使用的审批和调度器元数据、可选的最终内容回调和可选 UI 展示函数组成。注册表持有这些定义，循环通过它们分派调用。注册表的 `schemas()` 通过显式允许列表构建面向模型的 `ToolSchema[]`；`output`/`requiresApproval`/`execute`/`finalizeContent`/`timeoutMs`/`isConcurrencySafe`/`presentCall`/`presentResult` 绝不能泄漏到模型请求中。
 
 ```ts type-equiv
 /** Tool-owned canonical output contract used after the body returns a JSON value. */
@@ -27,6 +27,15 @@ interface ToolOutputDefinition {
 interface ToolDefinition extends ToolSchema {
   /** Mandatory canonical output declaration. */
   readonly output: ToolOutputDefinition
+  /**
+   * Require one user approval before this definition may dispatch. The
+   * registry snapshots this owner policy when execution starts and applies it
+   * after the reorderable `tools/pre-execute` waterfall, upgrading only a
+   * final allow decision to ask. Listener ordering therefore cannot bypass
+   * the requirement; an existing deny or ask remains authoritative. This
+   * metadata is never sent to the model.
+   */
+  readonly requiresApproval?: boolean
   /**
    * Run one accepted call and return only its canonical lossless-JSON value.
    * Async work must observe or forward `exec.signal` and settle only after its
@@ -283,10 +292,11 @@ interface CodeDispatchLog {
 ```ts type-equiv
 /**
  * One pending tool call inside the registry pipeline. Parsed arguments cross
- * one lossless-JSON materialization boundary before policy and are deep-frozen;
- * call identity, the caller signal, and the registry-assigned {@link token} are
- * readonly. The registry freezes the complete object before `tools/result`
- * observers run.
+ * one lossless-JSON materialization boundary before policy and are deep-frozen.
+ * The live object is sealed at creation: identity and arguments are runtime
+ * non-writable, while only `signal` remains writable for the documented
+ * around-dispatch replacement. The registry freezes the complete object before
+ * `tools/result` observers run.
  */
 interface ToolExecution extends ToolExecutionInput {
   /** Root model-requested call, resolved for every root and nested execution. */
@@ -308,7 +318,7 @@ interface ToolDispatchExecution extends Omit<ToolExecution, 'signal'> {
 }
 ```
 
-`ToolExecutionToken` 是不透明的运行时 `Symbol`，仅用于身份比较。策略执行前，`execute()` 会物化并冻结参数、拒绝非 JSON 输入并分配 token。身份字段、调用方必需的 signal 和可选的 parent token 均保持 readonly。`ToolDispatchExecution` 包装层可以替换 signal 但不能移除；注册表会在调用工具函数体前重新融合调用方的 signal。最终观察者接收冻结的执行身份。
+`ToolExecutionToken` 是不透明的运行时 `Symbol`，仅用于身份比较。策略执行前，`execute()` 会物化并冻结参数、拒绝非 JSON 输入并分配 token。身份字段、参数和可选的 parent token 在运行时均不可写；只有 signal 仍可供环绕分发包装层替换。类型化的 `ToolExecution` 视图仍把该 signal 视为 readonly，而 `ToolDispatchExecution` 包装层可以替换它但不能移除；注册表会在调用工具函数体前重新融合调用方的 signal。最终观察者接收冻结的执行身份。
 
 `ToolGuard` 是感知作用域的最终预分派策略。其返回类型有意不包含 allow 结果：`undefined` 保留 waterfall 的决策，而返回的 reason 只能缩减权限，因此后续监听器无法撤销它。
 
@@ -498,7 +508,11 @@ presentAs(mode: ToolPresentationMode): () => void
 /**
  * Register globally or in the calling agent scope. Scoped tools shadow
  * globals; duplicates within one layer and the reserved `run_code` name fail.
- * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
+ * `get()` preserves the supplied object identity, while execution and wire
+ * schema use the immutable contract captured at its first successful
+ * registration. Failed insertions retain no provisional contract, and a
+ * later registration of the same object cannot change `requiresApproval`.
+ * @param definition - tool schema, execution, and optional approval/finalization/presentation callbacks.
  * @returns the exact disposer that unregisters the tool.
  */
 register(definition: ToolDefinition): () => void
@@ -531,7 +545,7 @@ guard(guard: ToolGuard): () => void
  * actually executed.
  * @param name - the tool name as registered.
  * @param scope - the viewing scope (the agent); omitted = the global view.
- * @returns the definition the scope resolves, or undefined when none is visible.
+ * @returns the original registration object the scope resolves, or undefined when none is visible.
  */
 get(name: string, scope?: ScopeKey): ToolDefinition | undefined
 
@@ -571,7 +585,7 @@ async execute(exec: ToolExecutionInput): Promise<ToolExecutionResult>
 
 Types: [ScopeKey](scope.md)
 
-Source: [`packages/core/tools/src/index.ts:787`](../../packages/core/tools/src/index.ts)
+Source: [`packages/core/tools/src/index.ts:837`](../../packages/core/tools/src/index.ts)
 
 <a id="tools-events"></a>
 

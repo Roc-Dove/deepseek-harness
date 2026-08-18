@@ -100,10 +100,18 @@ describe('release families', () => {
     const dsh = releaseFamily('dsh')
     const vendor = releaseFamily('vendor')
     const harness = member('packages/a/library', '@deepseek-ai/dsh-library')
+    const cli = member('apps/cli', '@deepseek-ai/dsh')
     const vendored = member('vendor/cordis', '@deepseek-ai/cordis')
 
     expect(() => { dsh.validatePayload(harness, ['package/lib/index.js', 'package/src/index.ts']) })
       .toThrow(/publishes source file/)
+    expect(() => { dsh.validatePayload(cli, ['package/lib/bin.js']) })
+      .toThrow(/missing shipped computer-use preset file/)
+    expect(() => { dsh.validatePayload(cli, [
+      'package/lib/bin.js',
+      'package/config/agent-presets/computer-use/agent.cordis.yml',
+      'package/config/agent-presets/computer-use/preset.yml',
+    ]) }).not.toThrow()
     expect(() => { vendor.validatePayload(vendored, ['package/lib/index.js', 'package/src/index.ts']) }).not.toThrow()
     expect(() => { vendor.validatePayload(vendored, []) }).toThrow(/empty tarball/)
   })

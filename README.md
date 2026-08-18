@@ -26,6 +26,18 @@ Opening an installed build starts its bundled backend on an ephemeral loopback a
 
 The source development entry remains available for contributors, but installed builds do not run through a repository checkout and do not load local source patches.
 
+## Control macOS apps
+
+The preset picker includes **Computer use (macOS)**. It keeps the Standard mode coding tools and connects additional desktop-interaction tools after the user separately installs KimiCU in Applications and grants it Screen Recording and Accessibility access. KimiCU itself is not included in the Harness installer. The KimiCU 0.5.8 build verified for this integration is arm64-only and requires an Apple silicon Mac running macOS 14 or later.
+
+Without KimiCU, the preset remains visible and its Standard mode tools still work, but no computer-control tools are registered. Restart Harness after installing KimiCU or changing its permissions. Calls made through the registered KimiCU tools require explicit Harness approval under an interactive approval policy. That prompt is not an operating-system sandbox around KimiCU or the Standard mode shell. The default DeepSeek route can use accessibility text but cannot visually inspect returned screenshots; image understanding requires an image-capable model route. See the [desktop guide](apps/desktop/README.md) for setup, data-flow, permission, and platform details.
+
+<p align="center">
+  <img src="assets/readme/computer-use.jpg" alt="DeepSeek Harness preset menu showing Computer use with its KimiCU requirements" width="1000">
+</p>
+
+<p align="center"><sub>Computer use ships in the preset picker; KimiCU itself is installed separately.</sub></p>
+
 ## Return to archived work
 
 Archiving removes a session from the active list without deleting its history. Open Settings to restore it, or restore and open it in one action. Archive changes are ordered across connected tabs so an older response cannot replace a newer state.

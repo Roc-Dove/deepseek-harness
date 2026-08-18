@@ -124,6 +124,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
   const label = `mcp-client(${config.serverName})`
   const opts: ToolBridgeOptions = {
     registrationFailure: 'contain',
+    requireApproval: config.requireApproval === true,
     serverName: config.serverName,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
   }

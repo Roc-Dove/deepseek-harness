@@ -10,6 +10,9 @@
     - button "插件":
       - img
       - text: 插件
+    - button "已归档会话":
+      - img
+      - text: 已归档会话
     - button "Agent 预设":
       - img
       - text: Agent 预设
@@ -59,6 +62,16 @@
         - img
         - text: 查看
       - 'button "复制: 创造模式"':
+        - img
+        - text: 复制
+    - listitem:
+      - 'button "设为默认: 电脑操作"':
+        - text: 电脑操作 内置 标准模式加上通过另行安装的 KimiCU 实现的桌面操作。仅支持 macOS，需要开启屏幕录制与辅助功能权限。
+        - code: computer-use
+      - 'button "查看: 电脑操作"':
+        - img
+        - text: 查看
+      - 'button "复制: 电脑操作"':
         - img
         - text: 复制
   - heading "自定义" [level=3]

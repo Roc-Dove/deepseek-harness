@@ -44,7 +44,9 @@ interface PackagingModule {
     directory: string,
     identity?: { names: string[]; paths: string[] },
   ) => Promise<void>
+  shippedAgentPresetIds: () => Promise<string[]>
   verifyBuildMetadata: (outputDirectory: string) => Promise<Record<string, unknown>>
+  verifyShippedAgentPresets: (backend: string) => Promise<void>
   writeBuildMetadata: (options: {
     outputDirectory: string
     packaged: {
@@ -74,7 +76,9 @@ const {
   promoteBackendPackage,
   resolveBuildRequest,
   sanitizeGeneratedSourcePaths,
+  shippedAgentPresetIds,
   verifyBuildMetadata,
+  verifyShippedAgentPresets,
   writeBuildMetadata,
 } = packagingModule as PackagingModule
 const temporaryDirectories: string[] = []
@@ -317,6 +321,25 @@ describe('desktop packaging inputs', () => {
 })
 
 describe('desktop artifact integrity', () => {
+  it('requires the complete shipped agent-preset inventory in the backend', async () => {
+    const directory = await artifactTemporaryDirectory()
+    const backend = join(directory, 'backend')
+    const presetIds = await shippedAgentPresetIds()
+    expect(presetIds).toContain('computer-use')
+    await Promise.all(presetIds.flatMap(id => [
+      mkdir(join(backend, 'config', 'agent-presets', id), { recursive: true }).then(() =>
+        writeFile(join(backend, 'config', 'agent-presets', id, 'agent.cordis.yml'), '- id: fixture\n')),
+      mkdir(join(backend, 'config', 'agent-presets', id), { recursive: true }).then(() =>
+        writeFile(join(backend, 'config', 'agent-presets', id, 'preset.yml'), `name: ${id}\n`)),
+    ]))
+
+    await expect(verifyShippedAgentPresets(backend)).resolves.toBeUndefined()
+    await rm(join(backend, 'config', 'agent-presets', 'computer-use', 'preset.yml'))
+    await expect(verifyShippedAgentPresets(backend)).rejects.toThrow(
+      /packaged computer-use agent-preset metadata is missing/,
+    )
+  })
+
   it('requires every dependency and non-optional peer in the deployed runtime', async () => {
     const directory = await artifactTemporaryDirectory()
     const backend = join(directory, 'backend')

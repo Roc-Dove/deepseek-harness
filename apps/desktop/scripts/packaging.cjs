@@ -27,6 +27,7 @@ const DESKTOP_ROOT = resolve(__dirname, '..')
 const REPOSITORY_ROOT = resolve(DESKTOP_ROOT, '../..')
 const ARTIFACT_ROOT = join(REPOSITORY_ROOT, '.artifacts', 'desktop')
 const CLI_MANIFEST = join(REPOSITORY_ROOT, 'apps', 'cli', 'package.json')
+const CLI_AGENT_PRESETS_ROOT = join(REPOSITORY_ROOT, 'apps', 'cli', 'config', 'agent-presets')
 const BACKEND_PACKAGE = '@deepseek-ai/dsh'
 const DEPLOY_PACKAGE = '@deepseek-ai/dsh-desktop'
 const ELECTRON_VERSION = '39.8.10'
@@ -75,6 +76,25 @@ async function requireRegularFile(path, label) {
   if (metadata === undefined || !metadata.isFile()) {
     throw new Error(`desktop-package: ${label} is missing or is not a regular file: ${path}`)
   }
+}
+
+async function shippedAgentPresetIds() {
+  const entries = await readdir(CLI_AGENT_PRESETS_ROOT, { withFileTypes: true })
+  return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+}
+
+async function verifyShippedAgentPresets(backend) {
+  const presetIds = await shippedAgentPresetIds()
+  await Promise.all(presetIds.flatMap(id => [
+    requireRegularFile(
+      join(backend, 'config', 'agent-presets', id, 'agent.cordis.yml'),
+      `packaged ${id} agent-preset composition`,
+    ),
+    requireRegularFile(
+      join(backend, 'config', 'agent-presets', id, 'preset.yml'),
+      `packaged ${id} agent-preset metadata`,
+    ),
+  ]))
 }
 
 async function ensureArtifactRoot() {
@@ -775,6 +795,7 @@ async function verifyPackagedApplication(outputDirectory, request) {
     requireRegularFile(backendManifestPath, 'packaged backend manifest'),
     requireRegularFile(join(legal, 'LICENSE'), 'packaged license'),
     requireRegularFile(join(legal, 'THIRD_PARTY_NOTICES.md'), 'packaged third-party notices'),
+    verifyShippedAgentPresets(backend),
     ...requiredBackendPackages.map(name => requireRegularFile(
       join(backend, 'node_modules', name, 'package.json'),
       `packaged backend dependency ${name}`,
@@ -1016,8 +1037,10 @@ module.exports = {
   resolveBuildRequest,
   runCommand,
   sanitizeGeneratedSourcePaths,
+  shippedAgentPresetIds,
   usage,
   verifyBuildMetadata,
   verifyPackagedApplication,
+  verifyShippedAgentPresets,
   writeBuildMetadata,
 }
